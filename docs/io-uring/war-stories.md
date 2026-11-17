@@ -1,52 +1,52 @@
-# War Stories: io_uring Bugs and Incidents {#war-stories-io_uring-bugs-and-incidents}
+# 事件簿: io_uringのバグとインシデント {#war-stories-io_uring-bugs-and-incidents}
 
-> Real vulnerabilities, crashes, and behavioral surprises from io_uring's first years — what broke, why, and what the kernel learned
+> io_uringの最初の数年間に起きた実際の脆弱性、クラッシュ、挙動上の驚き — 何が壊れ、なぜ壊れ、カーネルが何を学んだか
 
-io_uring arrived in Linux 5.1 (May 2019) as the most significant I/O interface redesign in the kernel's history. It replaced the syscall-per-operation model with a shared-memory ring that lets applications submit and harvest completions without entering the kernel on the fast path. The design achieved real throughput gains — hundreds of thousands of IOPS on NVMe with near-zero syscall overhead — but it also introduced a subsystem of substantial complexity: asynchronous worker threads with independent lifetimes, user-controlled kernel object registration, cancellation state machines, and timeout chains.
+io_uringはLinux 5.1（2019年5月）で登場し、カーネル史上最も重要なI/Oインターフェースの再設計となった。操作ごとにシステムコールを呼ぶモデルを、共有メモリ上のリングで置き換えた。これにより、アプリケーションは高速パスでカーネルに入ることなく、投入と完了の回収を行える。この設計は実際にスループットの向上を達成した（NVMeで数十万IOPS、システムコールのオーバーヘッドはほぼゼロ）。しかし同時に、相当な複雑さを持つサブシステムも持ち込んだ。独立した生存期間を持つ非同期ワーカースレッド、ユーザーが制御するカーネルオブジェクトの登録、キャンセルの状態機械、タイムアウトのチェーンである。
 
-That complexity has produced a steady stream of bugs. This page documents four well-documented incidents: two privilege-escalation CVEs with publicly analyzed root causes, a kernel panic caused by an interaction with CPU hotplug, and a seccomp bypass that led Android, Chrome OS, and gVisor to disable io_uring for untrusted code. A fifth section covers a correctness trap — CQ ring overflow — that does not make headlines but silently corrupts application behavior.
+その複雑さは、絶え間なくバグを生み出してきた。このページでは、よく文書化された4つのインシデントを取り上げる。根本原因が公に分析されている2つの権限昇格CVE、CPUホットプラグとの相互作用によって引き起こされたカーネルパニック、そしてAndroid、Chrome OS、gVisorが信頼できないコードに対してio_uringを無効化するに至ったseccompバイパスである。5つ目のセクションでは、見出しを飾ることはないがアプリケーションの挙動を黙って損なう、正しさに関する落とし穴 — CQリングのオーバーフロー — を扱う。
 
-These are not theoretical risks. Each caused real harm in production: privilege escalation, kernel panics, data loss, or wholesale disabling of the feature across major platforms.
+これらは理論上のリスクではない。いずれも本番環境で実害をもたらした。権限昇格、カーネルパニック、データ損失、あるいは主要プラットフォーム全体でのこの機能の一斉無効化である。
 
 ---
 
-## Case 1: CVE-2022-29582 — use-after-free in the fixed file table {#case-1-cve-2022-29582-use-after-free-in-the-fixed-file-table}
+## ケース1: CVE-2022-29582 — 固定ファイルテーブルにおけるuse-after-free {#case-1-cve-2022-29582-use-after-free-in-the-fixed-file-table}
 
-### Before state {#before-state}
+### 事前の状態 {#before-state}
 
-io_uring supports *fixed files*: the application registers an array of file descriptors with `IORING_REGISTER_FILES`, and subsequent SQEs reference them by index rather than by fd. The kernel holds a reference-counted array of `struct file *` pointers — `io_ring_ctx->file_data` — and each in-flight operation increments a reference on the relevant slot before use and decrements it on completion.
+io_uringは*固定ファイル*をサポートしている。アプリケーションは`IORING_REGISTER_FILES`でファイルディスクリプタの配列を登録し、以降のSQEはfdではなくインデックスでそれらを参照する。カーネルは`struct file *`ポインタの参照カウント付き配列（`io_ring_ctx->file_data`）を保持し、処理中の各操作は使用前に該当スロットの参照をインクリメントし、完了時にデクリメントする。
 
-The registration and update path lives in `io_uring/rsrc.c`. File slots can be updated dynamically via `IORING_REGISTER_FILES_UPDATE`, which replaces individual entries in the array while operations may be in flight on existing entries.
+登録と更新のパスは`io_uring/rsrc.c`にある。ファイルスロットは`IORING_REGISTER_FILES_UPDATE`で動的に更新でき、これは既存のエントリ上で操作が処理中である可能性がある間に、配列の個々のエントリを置き換える。
 
-Prior to the fix, the code that handled file updates under concurrent operation teardown had a race window.
+修正以前は、並行する操作の後始末の最中にファイルの更新を処理するコードに、競合の時間窓が存在した。
 
-### The trigger {#the-trigger}
+### きっかけ {#the-trigger}
 
-The vulnerability was a race between two concurrent paths:
+この脆弱性は、次の2つの並行パス間の競合であった。
 
-1. An in-flight operation completing (or being cancelled) and releasing its reference to a fixed file slot.
-2. A `IORING_REGISTER_FILES_UPDATE` call arriving while that release was in progress.
+1. 処理中の操作が完了し（またはキャンセルされ）、固定ファイルスロットへの参照を解放する。
+2. その解放が進行中に`IORING_REGISTER_FILES_UPDATE`の呼び出しが到着する。
 
-The update path checked whether a slot was "in use" before replacing it, but the check and the actual replacement were not atomic with respect to the concurrent release. A carefully timed `IORING_REGISTER_FILES_UPDATE` could cause the slot to be replaced — freeing the old `struct file *` — at the same moment that another path was still holding a reference to it and had not yet finished using it.
+更新パスはスロットを置き換える前にそれが「使用中」かどうかを確認していたが、その確認と実際の置き換えは、並行する解放に対してアトミックではなかった。タイミングを慎重に合わせた`IORING_REGISTER_FILES_UPDATE`によって、別のパスがまだ参照を保持していてその使用を終えていないまさにその瞬間に、スロットが置き換えられる — つまり古い`struct file *`が解放される — ことがありえた。
 
-The result was a use-after-free on the `struct file` object. The freed object remained partially valid for long enough (the `f_op` pointer was often still readable) that the corruption was exploitable as a local privilege escalation primitive.
+その結果、`struct file`オブジェクトに対するuse-after-freeが発生した。解放されたオブジェクトは十分長い間部分的に有効なまま残った（`f_op`ポインタはしばしばまだ読み取り可能だった）ため、この破壊はローカル権限昇格のプリミティブとして悪用可能であった。
 
-### Observed behavior {#observed-behavior}
+### 観測された挙動 {#observed-behavior}
 
-From a user's perspective, no error was visible during normal operation. The race was narrow but not too narrow to hit reliably: exploit tooling documented in the Qualys advisory could trigger the condition repeatedly by racing `io_uring_enter` (to drive completions) against `io_uring_register` with `IORING_REGISTER_FILES_UPDATE`.
+ユーザーの視点からは、通常運用中にエラーは何も見えなかった。競合の時間窓は狭かったが、確実に当てられないほど狭くはなかった。Qualysのアドバイザリに記載されたエクスプロイトツールは、（完了を駆動するための）`io_uring_enter`と`IORING_REGISTER_FILES_UPDATE`付きの`io_uring_register`を競合させることで、この状態を繰り返し引き起こせた。
 
-On an unpatched kernel the bug could be reached by any local user with the ability to create an io_uring ring — no special capability required. The CVSS score was 7.8 (High). The vulnerability affected kernels from the introduction of fixed files through 5.17.2, and was also present in the 5.15 LTS tree through 5.15.33.
+パッチ未適用のカーネルでは、io_uringリングを作成できる任意のローカルユーザーがこのバグに到達できた。特別なケーパビリティは必要なかった。CVSSスコアは7.8（High）であった。この脆弱性は固定ファイルの導入から5.17.2までのカーネルに影響し、5.15 LTSツリーでも5.15.33まで存在した。
 
-### Why it happened — kernel internals {#why-it-happened-kernel-internals}
+### なぜ起きたか — カーネル内部 {#why-it-happened-kernel-internals}
 
-The lifetime of a fixed file slot had two relevant reference counts:
+固定ファイルスロットの生存期間には、関係する参照カウントが2つあった。
 
-- A **per-slot reference** (`io_fixed_file_set` inside the `io_rsrc_data` structure) counting how many in-flight operations hold a borrow on that slot.
-- The **normal `struct file` reference count** (`file->f_count`), which io_uring incremented when it installed the file and decremented when it removed it.
+- **スロットごとの参照**（`io_rsrc_data`構造体の中の`io_fixed_file_set`）。そのスロットを借用している処理中の操作の数を数える。
+- **通常の`struct file`の参照カウント**（`file->f_count`）。io_uringはファイルを設置するときにこれをインクリメントし、取り除くときにデクリメントした。
 
-The race window was in the transition between "operation is done using the slot" and "slot is safe to replace." The operation decrement happened in the completion path, which runs on an io-wq thread. The update path ran on the syscall thread calling `io_uring_register`. The update path read the per-slot reference count and, if it appeared zero, proceeded to swap out the `struct file *` pointer. But the completion path could decrement the reference count to zero *after* the update path had read it as nonzero — or conversely, the completion path could decrement to zero and then stall, while the update path observed zero and freed the file before the completion path had actually finished referencing it.
+競合の時間窓は、「操作がスロットの使用を終えた」状態から「スロットを安全に置き換えられる」状態への遷移の間にあった。操作によるデクリメントは完了パスで行われ、これはio-wqスレッド上で実行される。更新パスは`io_uring_register`を呼ぶシステムコールのスレッド上で実行された。更新パスはスロットごとの参照カウントを読み、それがゼロに見えれば`struct file *`ポインタの差し替えに進んだ。しかし完了パスが、更新パスが非ゼロとして読んだ*後で*参照カウントをゼロにデクリメントすることがありえた。あるいは逆に、完了パスがゼロにデクリメントした後に停滞し、その間に更新パスがゼロを観測して、完了パスが実際に参照を終える前にファイルを解放することもありえた。
 
-The fix required ensuring that the update path and the completion path could not race on the same slot: the update needed to wait for all in-flight borrows on a slot to drain before replacing it, using proper memory ordering barriers and a deferred-free mechanism (RCU or a similar grace period) rather than a racy check-then-act sequence.
+修正では、更新パスと完了パスが同じスロット上で競合しないことを保証する必要があった。更新は、競合しうる「確認してから実行する」手順ではなく、適切なメモリオーダリングのバリアと遅延解放の仕組み（RCUまたは同様のグレースピリオド）を使って、スロット上の処理中の借用がすべて排出されるのを待ってから置き換える必要があった。
 
 ```
 Thread A (io-wq, completing op)        Thread B (syscall, REGISTER_FILES_UPDATE)
@@ -58,95 +58,95 @@ use slot->file   // UAF here
 decrement slot->refcount
 ```
 
-The kernel code involved was `io_uring/rsrc.c`, specifically the fixed file registration, update, and teardown functions.
+関係するカーネルコードは`io_uring/rsrc.c`、具体的には固定ファイルの登録、更新、後始末の関数であった。
 
-### Resolution {#resolution}
+### 解決 {#resolution}
 
-The fix tightened the lifetime contract between the update path and the completion path. The update path was changed to use a deferred replacement: rather than immediately freeing the old file when the reference count appeared zero, it scheduled the actual `fput` through a mechanism that guaranteed all concurrent accessors had completed. The reference counting around slot borrow/release was also corrected to use appropriate atomic operations with the right ordering.
+修正は、更新パスと完了パスの間の生存期間の契約を厳格にした。更新パスは遅延置き換えを使うように変更された。参照カウントがゼロに見えたときに古いファイルを即座に解放するのではなく、すべての並行アクセス者が完了したことを保証する仕組みを通じて、実際の`fput`をスケジュールするようにした。スロットの借用/解放にまつわる参照カウントも、正しいオーダリングを持つ適切なアトミック操作を使うよう修正された。
 
-CVE-2022-29582 was fixed in:
+CVE-2022-29582は次で修正された。
 
-- Linux **5.17.3** (mainline stable)
-- Linux **5.15.34** (LTS backport)
-- Linux **5.10.111** (LTS backport)
+- Linux **5.17.3**（メインラインstable）
+- Linux **5.15.34**（LTSバックポート）
+- Linux **5.10.111**（LTSバックポート）
 
-The fix was not backported to 5.4 LTS because the fixed-file update feature introduced the race did not exist in that tree in the same form.
+この修正は5.4 LTSにはバックポートされなかった。競合を持ち込んだ固定ファイル更新機能が、そのツリーには同じ形では存在しなかったためである。
 
-A detailed public exploitation analysis was published by Qualys, demonstrating full local privilege escalation to root on a default Ubuntu installation. The writeup is referenced in [Further reading](#further-reading).
+Qualysは詳細な悪用分析を公開し、デフォルトのUbuntuインストール上でrootへの完全なローカル権限昇格を実証した。この解説は[参考文献](#further-reading)で参照している。
 
-### What it taught us {#what-it-taught-us}
+### 教訓 {#what-it-taught-us}
 
-**Dynamic update paths on shared kernel objects require careful synchronization.** Fixed files introduced an optimization (avoiding per-operation `fget`/`fput` overhead by pre-registering files) but the update mechanism needed to reason carefully about objects that could be in use on other threads. The pattern — "check reference count, if zero then free" — is unsafe without proper barriers and is a recurring source of UAF bugs in concurrent kernel code.
+**共有されたカーネルオブジェクトに対する動的な更新パスには、注意深い同期が必要である。** 固定ファイルは（ファイルを事前登録することで操作ごとの`fget`/`fput`のオーバーヘッドを回避するという）最適化を導入したが、その更新の仕組みは、他のスレッドで使用中かもしれないオブジェクトについて注意深く推論する必要があった。「参照カウントを確認し、ゼロなら解放する」というパターンは、適切なバリアなしでは安全でなく、並行カーネルコードにおけるUAFバグの繰り返し現れる原因である。
 
-**io_uring's wide syscall accessibility amplifies the impact of local vulnerabilities.** Unlike older async I/O interfaces that required elevated privileges or large ring buffer setups, io_uring rings can be created by ordinary user processes with a single `io_uring_setup` syscall. A local privilege escalation in io_uring is therefore reachable from any sandboxed context that has not specifically blocked `io_uring_setup`.
+**io_uringのシステムコールとしての到達しやすさは、ローカル脆弱性の影響を増幅する。** 昇格した権限や大きなリングバッファのセットアップを必要とした古い非同期I/Oインターフェースとは異なり、io_uringリングは通常のユーザープロセスが1回の`io_uring_setup`システムコールで作成できる。したがってio_uringのローカル権限昇格は、`io_uring_setup`を明示的にブロックしていない任意のサンドボックス化されたコンテキストから到達可能である。
 
-!!! warning "Pattern to watch for"
-    Any kernel component that maintains a registered array of kernel objects that can be updated while in-flight operations hold references to those objects faces this class of race. The canonical safe pattern is: mark the slot as "pending replacement," drain all current users via a reference counting mechanism with proper ordering, then perform the replacement. Check-then-act without atomicity is not safe.
+!!! warning "注意すべきパターン"
+    カーネルオブジェクトの登録済み配列を管理し、処理中の操作がそれらのオブジェクトへの参照を保持している間に配列を更新できるカーネルコンポーネントは、どれもこの種の競合に直面する。標準的な安全パターンは次のとおりである。スロットを「置き換え保留中」としてマークし、適切なオーダリングを持つ参照カウントの仕組みで現在の利用者をすべて排出し、それから置き換えを行う。アトミック性のない「確認してから実行」は安全ではない。
 
 ---
 
-## Case 2: CVE-2023-2598 — integer overflow in fixed buffer registration {#case-2-cve-2023-2598-integer-overflow-in-fixed-buffer-registration}
+## ケース2: CVE-2023-2598 — 固定バッファ登録における整数オーバーフロー {#case-2-cve-2023-2598-integer-overflow-in-fixed-buffer-registration}
 
-### Before state {#before-state_1}
+### 事前の状態 {#before-state_1}
 
-io_uring supports *fixed buffers*: the application calls `io_uring_register` with `IORING_REGISTER_BUFFERS` to pre-register a set of user-space memory regions with the kernel. The kernel pins the pages, maps them into the io_uring context, and subsequent read/write operations that reference these buffers by index (`IORING_OP_READ_FIXED`, `IORING_OP_WRITE_FIXED`) can skip the per-operation `get_user_pages` overhead.
+io_uringは*固定バッファ*をサポートしている。アプリケーションは`IORING_REGISTER_BUFFERS`を指定して`io_uring_register`を呼び、ユーザー空間のメモリ領域の集合をカーネルに事前登録する。カーネルはそのpageをピン留めしてio_uringコンテキストにマップし、以降のread/write操作のうちインデックスでこれらのバッファを参照するもの（`IORING_OP_READ_FIXED`、`IORING_OP_WRITE_FIXED`）は、操作ごとの`get_user_pages`のオーバーヘッドを省略できる。
 
-The registration code in `io_uring/rsrc.c` accepts a `struct iovec` array from userspace: each entry specifies a base address and length. The kernel must compute the total number of pages that need to be pinned across all buffer entries to determine how much memory to allocate for the internal accounting structures.
+`io_uring/rsrc.c`の登録コードは、ユーザー空間から`struct iovec`の配列を受け取る。各エントリはベースアドレスと長さを指定する。カーネルは、内部のアカウンティング構造体のためにどれだけのメモリを割り当てるかを決めるため、すべてのバッファエントリにわたってピン留めが必要なpageの総数を計算しなければならない。
 
-### The trigger {#the-trigger_1}
+### きっかけ {#the-trigger_1}
 
-When computing the total page count across all registered buffers, the registration code summed page counts per buffer. The page count per individual buffer was calculated by dividing the buffer length by `PAGE_SIZE` (with alignment handling). The accumulation was done in a variable that was not wide enough — it could overflow when the sum of pages across all registered buffers exceeded `UINT_MAX` (on 32-bit paths) or when specific alignment edge cases were hit.
+登録されたすべてのバッファにわたるpageの総数を計算する際、登録コードはバッファごとのpage数を合計していた。個々のバッファのpage数は、バッファ長を`PAGE_SIZE`で割って（アラインメントの扱いを含めて）計算された。累算は幅の足りない変数で行われており、登録されたすべてのバッファのpage数の合計が`UINT_MAX`を超えたとき（32ビットのパス上で）や、特定のアラインメントのエッジケースに当たったときにオーバーフローしえた。
 
-An attacker could register a set of buffers whose total page count wrapped around to a small value. The kernel would then allocate an internal page accounting array sized for the small (overflowed) count, but subsequent operations would access that array as if it were sized for the true, larger count — producing an out-of-bounds write into kernel memory.
+攻撃者は、page総数が小さな値に折り返すようなバッファの集合を登録できた。するとカーネルは小さな（オーバーフローした）数に合わせたサイズで内部のpageアカウンティング配列を割り当てるが、以降の操作はその配列を本来のより大きな数に合わせたサイズであるかのようにアクセスし、カーネルメモリへの範囲外書き込みが発生した。
 
-### Observed behavior {#observed-behavior_1}
+### 観測された挙動 {#observed-behavior_1}
 
-The bug was not externally visible during registration. `IORING_REGISTER_BUFFERS` returned success. The corruption manifested later, during operations that used the fixed buffers, when the undersized internal array was accessed past its end.
+このバグは登録時には外から見えなかった。`IORING_REGISTER_BUFFERS`は成功を返した。破壊は後になって、固定バッファを使う操作の中で、サイズ不足の内部配列が末尾を越えてアクセスされたときに表面化した。
 
-On an unpatched kernel, a local user could craft a set of buffer registrations whose combined page count overflowed the accumulator, then use `IORING_OP_READ_FIXED` or `IORING_OP_WRITE_FIXED` to trigger the out-of-bounds access. This is a memory-corruption primitive usable for privilege escalation.
+パッチ未適用のカーネルでは、ローカルユーザーが、合計page数がアキュムレータをオーバーフローさせるようなバッファ登録の集合を作り、その後`IORING_OP_READ_FIXED`または`IORING_OP_WRITE_FIXED`を使って範囲外アクセスを引き起こせた。これは権限昇格に使えるメモリ破壊のプリミティブである。
 
-The affected kernel versions spanned from the introduction of fixed buffers (Linux 5.1) through **Linux 6.2**. The fix landed in **Linux 6.3**.
+影響を受けたカーネルバージョンは、固定バッファの導入（Linux 5.1）から**Linux 6.2**までに及んだ。修正は**Linux 6.3**に入った。
 
-### Why it happened — kernel internals {#why-it-happened-kernel-internals_1}
+### なぜ起きたか — カーネル内部 {#why-it-happened-kernel-internals_1}
 
-The core of the overflow was in the page-counting path inside `io_sqe_buffers_register()` in `io_uring/rsrc.c`. Each buffer's page count was computed correctly in isolation, but the accumulator holding the running total was either a `u32` or was used in a context where it could wrap. The subsequent `kvmalloc` call for the internal `struct io_mapped_ubuf` array was sized based on the number of buffers (not the total page count), but the page-tracking bookkeeping array that relied on the total count was what overflowed.
+オーバーフローの核心は、`io_uring/rsrc.c`の`io_sqe_buffers_register()`内にあるpage数計算のパスにあった。各バッファのpage数は単独では正しく計算されていたが、累計を保持するアキュムレータが`u32`であったか、折り返しうる文脈で使われていた。内部の`struct io_mapped_ubuf`配列のための後続の`kvmalloc`呼び出しは（page総数ではなく）バッファ数に基づいてサイズが決められていたが、オーバーフローしたのは総数に依存するpage追跡用の管理配列であった。
 
-A simplified view of the problematic pattern:
+問題のあるパターンを簡略化すると次のようになる。
 
 ```c
-// Pseudocode illustrating the vulnerable shape (not literal kernel code)
+// 脆弱な形を示す疑似コード（文字どおりのカーネルコードではない）
 u32 total_pages = 0;
 for (int i = 0; i < nr_bufs; i++) {
     unsigned long npages = (iov[i].iov_len + PAGE_SIZE - 1) >> PAGE_SHIFT;
-    total_pages += npages;  // can overflow if sum > UINT_MAX
+    total_pages += npages;  // 合計がUINT_MAXを超えるとオーバーフローしうる
 }
-// Allocate internal array sized for total_pages
-// ... but total_pages has wrapped to a small value
+// total_pagesに合わせたサイズで内部配列を割り当てる
+// ... しかしtotal_pagesは小さな値に折り返している
 struct page **pages = kvmalloc_array(total_pages, sizeof(*pages), GFP_KERNEL);
-// Subsequent use writes past the end of pages[]
+// 以降の使用でpages[]の末尾を越えて書き込む
 ```
 
-The fix changed the accumulator to `size_t` (or equivalent unsigned long) and added an explicit overflow check that returns `-EINVAL` if the total page count would exceed `ULONG_MAX` or a configured maximum. It also added validation that each individual buffer's length does not exceed reasonable bounds before accumulation.
+修正ではアキュムレータを`size_t`（または同等のunsigned long）に変更し、page総数が`ULONG_MAX`または設定された上限を超える場合に`-EINVAL`を返す明示的なオーバーフローチェックを追加した。また、累算の前に各バッファの長さが妥当な範囲を超えていないことの検証も追加した。
 
-### Resolution {#resolution_1}
+### 解決 {#resolution_1}
 
-The fix in Linux 6.3 corrected the type of the accumulator and added bounds checks that reject registration calls whose total page count exceeds a safe limit. Importantly, the check was added *before* any allocation, so a crafted registration simply returns an error rather than allocating an undersized structure.
+Linux 6.3の修正は、アキュムレータの型を修正し、page総数が安全な上限を超える登録呼び出しを拒否する範囲チェックを追加した。重要なのは、チェックがあらゆる割り当ての*前に*追加されたことであり、細工された登録はサイズ不足の構造体を割り当てることなく単にエラーを返すようになった。
 
-The fix was backported to the 6.1 and 5.15 LTS trees. Systems running kernels before 6.3 (or the relevant LTS backport versions) should be considered vulnerable if local unprivileged users have access to `io_uring_setup`.
+この修正は6.1および5.15のLTSツリーにバックポートされた。6.3より前の（または該当するLTSバックポートバージョンより前の）カーネルを実行しているシステムは、権限のないローカルユーザーが`io_uring_setup`にアクセスできる場合、脆弱であるとみなすべきである。
 
-The source of the vulnerability — `io_uring/rsrc.c:io_sqe_buffers_register()` — is the same file implicated in CVE-2022-29582, highlighting that fixed resource registration paths have been a consistent source of bugs.
+この脆弱性の発生源である`io_uring/rsrc.c:io_sqe_buffers_register()`は、CVE-2022-29582で問題となったのと同じファイルであり、固定リソースの登録パスが一貫してバグの源になってきたことを浮き彫りにしている。
 
-### What it taught us {#what-it-taught-us_1}
+### 教訓 {#what-it-taught-us_1}
 
-**Integer overflow in size calculations before memory allocation is one of the most common classes of kernel vulnerability.** The pattern is well-known: if you compute `n * sizeof(T)` or `sum(sizes)` without overflow checking and then allocate based on the result, an overflow turns a large allocation intent into a small allocation with a large subsequent access. The fix is always the same: use `size_add`/`size_mul` overflow-checking helpers (or equivalent explicit checks) before any allocation whose size derives from user-supplied inputs.
+**メモリ割り当て前のサイズ計算における整数オーバーフローは、最もよくあるカーネル脆弱性の種類の1つである。** このパターンはよく知られている。オーバーフローチェックなしで`n * sizeof(T)`や`sum(sizes)`を計算し、その結果に基づいて割り当てると、オーバーフローによって大きな割り当てを意図したものが小さな割り当てとなり、その後に大きなアクセスが行われる。修正は常に同じである。ユーザーが与えた入力からサイズが導かれる割り当ての前には、`size_add`/`size_mul`のようなオーバーフロー検査付きヘルパー（または同等の明示的チェック）を使うことである。
 
-**Registration paths deserve the same scrutiny as execution paths.** io_uring bugs often live in the `io_uring_register` paths — fixed file registration, buffer registration, credential registration — rather than in the hot SQE submission path. These registration paths handle complex user-supplied arrays and perform multi-step kernel object setup, but they receive less fuzz coverage because they are called once at setup time rather than thousands of times per second.
+**登録パスにも実行パスと同等の精査が必要である。** io_uringのバグは、ホットなSQE投入パスよりも、`io_uring_register`のパス — 固定ファイルの登録、バッファの登録、クレデンシャルの登録 — に潜んでいることが多い。これらの登録パスはユーザーが与えた複雑な配列を扱い、複数ステップのカーネルオブジェクトのセットアップを行うが、毎秒数千回ではなくセットアップ時に1回呼ばれるだけなので、ファジングのカバレッジが少ない。
 
-!!! warning "Pattern to watch for"
-    Any kernel code that accepts a user-supplied count or array of lengths and accumulates them before a single allocation is a candidate for this bug class. Linux provides `array_size()`, `size_add()`, and `check_add_overflow()` helpers precisely for this purpose. When reviewing io_uring registration code, look for accumulations of user-supplied lengths without these helpers.
+!!! warning "注意すべきパターン"
+    ユーザーが与えた個数や長さの配列を受け取り、それらを累算してから1回の割り当てを行うカーネルコードは、どれもこの種のバグの候補である。Linuxはまさにこの目的のために`array_size()`、`size_add()`、`check_add_overflow()`ヘルパーを提供している。io_uringの登録コードをレビューする際は、これらのヘルパーを使わずにユーザーが与えた長さを累算している箇所を探すこと。
 
     ```c
-    // Safe pattern using kernel overflow-checking helpers
+    // カーネルのオーバーフロー検査ヘルパーを使った安全なパターン
     size_t total;
     if (check_add_overflow(existing_total, new_pages, &total))
         return -EINVAL;
@@ -154,116 +154,116 @@ The source of the vulnerability — `io_uring/rsrc.c:io_sqe_buffers_register()` 
 
 ---
 
-## Case 3: SQPOLL thread crash on CPU hotplug {#case-3-sqpoll-thread-crash-on-cpu-hotplug}
+## ケース3: CPUホットプラグ時のSQPOLLスレッドのクラッシュ {#case-3-sqpoll-thread-crash-on-cpu-hotplug}
 
-### Before state {#before-state_2}
+### 事前の状態 {#before-state_2}
 
-`IORING_SETUP_SQPOLL` creates a dedicated kernel thread — the SQ polling thread — whose sole job is to poll the submission ring in a tight loop, draining SQEs without requiring the application to make `io_uring_enter` syscalls. This is the lowest-latency submission path: the application writes SQEs into the shared ring and the kernel thread picks them up within its poll interval.
+`IORING_SETUP_SQPOLL`は専用のカーネルスレッド — SQポーリングスレッド — を作成する。その唯一の仕事は投入リングをタイトなループでポーリングし、アプリケーションに`io_uring_enter`システムコールを呼ばせることなくSQEを排出することである。これは最もレイテンシの低い投入パスである。アプリケーションが共有リングにSQEを書き込むと、カーネルスレッドがそのポーリング間隔内にそれを拾い上げる。
 
-The SQPOLL thread is bound to a CPU when the ring is created. If `IORING_SETUP_SQ_AFF` is specified, the thread is pinned to a particular CPU via `sq_thread_cpu` in `struct io_uring_params`. If unspecified, it runs on whatever CPU the creating process was on at setup time.
+SQPOLLスレッドはリング作成時にCPUにバインドされる。`IORING_SETUP_SQ_AFF`が指定されている場合、スレッドは`struct io_uring_params`の`sq_thread_cpu`によって特定のCPUにピン留めされる。指定されていない場合は、セットアップ時に作成元プロセスがいたCPU上で動作する。
 
-CPU hotplug is the Linux mechanism for taking CPUs online or offline at runtime — used in cloud environments for power management, in NUMA systems for topology changes, and by hypervisors when adjusting vCPU counts for running VMs.
+CPUホットプラグは、実行時にCPUをオンラインまたはオフラインにするLinuxの仕組みである。クラウド環境では電力管理に、NUMAシステムではトポロジの変更に、ハイパーバイザでは実行中のVMのvCPU数を調整する際に使われる。
 
-### The trigger {#the-trigger_2}
+### きっかけ {#the-trigger_2}
 
-When a CPU is taken offline (`CPU_DOWN` notifier chain), all threads running on that CPU must be migrated to other CPUs. The kernel's CPU hotplug infrastructure sends notifications to subsystems that have per-CPU threads or state, giving them an opportunity to migrate or quiesce before the CPU is removed from the scheduler's runqueue set.
+CPUがオフラインにされると（`CPU_DOWN`通知チェーン）、そのCPU上で動作しているすべてのスレッドを他のCPUに移動させなければならない。カーネルのCPUホットプラグ基盤は、CPUごとのスレッドや状態を持つサブシステムに通知を送り、CPUがスケジューラのランキュー集合から取り除かれる前に移動または静止する機会を与える。
 
-io_uring's SQPOLL thread did not properly register with the CPU hotplug notification chain in early implementations. When the CPU the SQPOLL thread was bound to was taken offline, the thread had nowhere to migrate. Depending on the kernel version and the exact hotplug sequence, the result ranged from the SQPOLL thread stalling (stopping processing SQEs while appearing alive) to a kernel BUG() or NULL pointer dereference when the scheduler tried to place the thread on a CPU that no longer existed in the active set.
+初期の実装では、io_uringのSQPOLLスレッドはCPUホットプラグの通知チェーンに適切に登録していなかった。SQPOLLスレッドがバインドされたCPUがオフラインにされると、スレッドには移動先がなかった。カーネルバージョンや正確なホットプラグの手順によって、結果はSQPOLLスレッドの停止（生きているように見えながらSQEの処理をやめる）から、スケジューラがアクティブな集合にもはや存在しないCPUにスレッドを配置しようとしたときのカーネルのBUG()やNULLポインタ参照まで、さまざまであった。
 
-The problem was particularly acute when `IORING_SETUP_SQ_AFF` had pinned the thread to a specific CPU: the thread had an explicit CPU affinity mask containing only the now-offline CPU, and the scheduler could not migrate it anywhere.
+この問題は、`IORING_SETUP_SQ_AFF`がスレッドを特定のCPUにピン留めしていた場合に特に深刻であった。スレッドは今やオフラインのCPUだけを含む明示的なCPUアフィニティマスクを持っており、スケジューラはそれをどこにも移動できなかった。
 
-### Observed behavior {#observed-behavior_2}
+### 観測された挙動 {#observed-behavior_2}
 
-In cloud environments that perform live CPU hotplug — either for power efficiency (offline unused vCPUs) or during live migration — SQPOLL rings created before a hotplug event would start misbehaving afterward. SQEs written to the ring were not processed; the application appeared to submit work but no completions arrived. In more severe cases, a kernel panic occurred during the hotplug sequence itself when the CPU removal attempted to quiesce threads it could not migrate.
+稼働中のCPUホットプラグを行うクラウド環境 — 電力効率のため（未使用のvCPUをオフラインにする）またはライブマイグレーション中 — では、ホットプラグイベントの前に作成されたSQPOLLリングが、その後おかしな挙動を示し始めた。リングに書き込まれたSQEは処理されず、アプリケーションは作業を投入しているように見えるのに完了が一向に届かなかった。より深刻なケースでは、CPUの削除処理が移動させられないスレッドを静止させようとした際に、ホットプラグ手順の最中にカーネルパニックが起きた。
 
-The issue was intermittent because it depended on SQPOLL rings being active at the moment of a CPU offline event, which in turn depended on workload timing and the hotplug policy of the specific platform.
+この問題は断続的であった。CPUオフラインイベントの瞬間にSQPOLLリングがアクティブであることに依存し、それはさらにワークロードのタイミングと特定のプラットフォームのホットプラグポリシーに依存していたからである。
 
-The bug was reported and traced through kernel commit logs in discussions of SQPOLL robustness, and fixes were applied across the 5.x kernel series.
+このバグはSQPOLLの堅牢性に関する議論の中で報告され、カーネルのコミットログを通じて追跡され、修正は5.xカーネル系列にわたって適用された。
 
-### Why it happened — kernel internals {#why-it-happened-kernel-internals_2}
+### なぜ起きたか — カーネル内部 {#why-it-happened-kernel-internals_2}
 
-The SQPOLL thread was created with `kthread_create_on_cpu()` or equivalent, which pins the thread to a specific CPU at creation time. The CPU affinity was set unconditionally and was not updated when that CPU went offline.
+SQPOLLスレッドは`kthread_create_on_cpu()`またはそれと同等のもので作成され、作成時にスレッドを特定のCPUにピン留めする。CPUアフィニティは無条件に設定され、そのCPUがオフラインになっても更新されなかった。
 
-Linux CPU hotplug proceeds in phases via the `cpuhp_setup_state` mechanism. Subsystems that need to react to CPU removal register callbacks at specific phases. If a subsystem does not register a hotplug callback, the kernel makes a best-effort attempt to migrate any threads, but threads with explicit CPU affinity masks that have become invalid cannot be migrated to a valid CPU automatically — the affinity mask must be updated first.
+LinuxのCPUホットプラグは、`cpuhp_setup_state`の仕組みを介して段階的に進行する。CPUの削除に反応する必要があるサブシステムは、特定の段階でコールバックを登録する。サブシステムがホットプラグのコールバックを登録しない場合、カーネルはスレッドの移動をベストエフォートで試みるが、無効になった明示的なCPUアフィニティマスクを持つスレッドを有効なCPUへ自動的に移動させることはできない。まずアフィニティマスクを更新しなければならない。
 
-The SQPOLL thread also held state (`struct io_sq_data`) that referenced the CPU number it was scheduled on. Some code paths read this CPU number for scheduling decisions without validating that the CPU was still online, producing accesses that could fault or produce incorrect behavior.
+SQPOLLスレッドはまた、スケジュールされているCPU番号を参照する状態（`struct io_sq_data`）を保持していた。一部のコードパスは、CPUがまだオンラインであることを検証せずにスケジューリングの判断のためにこのCPU番号を読んでおり、フォルトを起こしうるアクセスや誤った挙動を生んでいた。
 
-The fix required:
+修正には次が必要であった。
 
-1. Registering a CPU hotplug state callback in the io_uring SQPOLL path that fires when a CPU is being taken offline.
-2. In that callback, either migrating the SQPOLL thread to another CPU (by updating its affinity mask to a valid set) or — if the thread was pinned via `IORING_SETUP_SQ_AFF` to a specific CPU that is going offline — signaling an error condition to the ring and waking any blocked submitters.
-3. Ensuring that the CPU number stored in SQPOLL state structures was validated before use or updated atomically during hotplug transitions.
+1. CPUがオフラインにされようとしているときに発火するCPUホットプラグ状態のコールバックを、io_uringのSQPOLLパスに登録する。
+2. そのコールバックの中で、SQPOLLスレッドを別のCPUに移動させる（アフィニティマスクを有効な集合に更新する）か、あるいは — スレッドが`IORING_SETUP_SQ_AFF`によってオフラインになろうとしている特定のCPUにピン留めされていた場合は — リングにエラー状態を通知し、ブロックしている投入者を起こす。
+3. SQPOLLの状態構造体に格納されたCPU番号が、使用前に検証されるか、ホットプラグの遷移中にアトミックに更新されることを保証する。
 
-### Resolution {#resolution_2}
+### 解決 {#resolution_2}
 
-The kernel patches that addressed SQPOLL CPU hotplug handling added io_uring to the `cpuhp_setup_state` infrastructure with appropriate prepare and cleanup callbacks. The SQPOLL thread's CPU affinity handling was also hardened: on systems where the pinned CPU goes offline, the thread migrates to the nearest available CPU rather than becoming unschedulable.
+SQPOLLのCPUホットプラグ処理に対処したカーネルパッチは、適切なprepareおよびcleanupコールバックとともにio_uringを`cpuhp_setup_state`基盤に追加した。SQPOLLスレッドのCPUアフィニティ処理も強化された。ピン留めされたCPUがオフラインになるシステムでは、スレッドはスケジュール不能になるのではなく、最も近い利用可能なCPUへ移動する。
 
-Applications that use `IORING_SETUP_SQ_AFF` to pin the SQPOLL thread to a specific CPU should be aware that on systems with dynamic CPU topology (cloud VMs, systems using `cpupower` to offline cores), the pinned CPU may not remain available. The SQPOLL hotplug fix was integrated without a dedicated feature flag; a kernel version check is the appropriate way to verify this fix is present. There is no specific flag in `io_uring_params.features` for SQPOLL hotplug safety — other available feature flags such as `IORING_FEAT_NODROP` are unrelated to this fix.
+`IORING_SETUP_SQ_AFF`を使ってSQPOLLスレッドを特定のCPUにピン留めするアプリケーションは、動的なCPUトポロジを持つシステム（クラウドVM、`cpupower`を使ってコアをオフラインにするシステム）では、ピン留めしたCPUが利用可能であり続けるとは限らないことを認識しておくべきである。SQPOLLのホットプラグ修正は専用の機能フラグなしで取り込まれたため、この修正が存在するかを確認するにはカーネルバージョンのチェックが適切な方法である。`io_uring_params.features`にはSQPOLLのホットプラグ安全性を示す特定のフラグはない。`IORING_FEAT_NODROP`のような他の利用可能な機能フラグはこの修正とは無関係である。
 
-For applications that do not strictly require a specific CPU affinity for the SQPOLL thread, omitting `IORING_SETUP_SQ_AFF` is the safer choice: the kernel assigns the thread to a CPU and manages migration automatically.
+SQPOLLスレッドに特定のCPUアフィニティを厳密には必要としないアプリケーションにとっては、`IORING_SETUP_SQ_AFF`を省略するのがより安全な選択である。カーネルがスレッドをCPUに割り当て、移動を自動的に管理する。
 
-### What it taught us {#what-it-taught-us_2}
+### 教訓 {#what-it-taught-us_2}
 
-**Kernel threads with CPU affinity must participate in the hotplug notifier chain.** The CPU hotplug infrastructure requires active cooperation: subsystems cannot assume that a CPU they depend on will remain online. This is a known requirement for device drivers and subsystems that maintain per-CPU state, but it was not fully handled in io_uring's initial SQPOLL implementation.
+**CPUアフィニティを持つカーネルスレッドは、ホットプラグの通知チェーンに参加しなければならない。** CPUホットプラグ基盤は能動的な協力を必要とする。サブシステムは、依存するCPUがオンラインであり続けると仮定することはできない。これはCPUごとの状態を管理するデバイスドライバやサブシステムにとって既知の要件だが、io_uringの初期のSQPOLL実装では十分に扱われていなかった。
 
-**Performance features that depend on specific system topology create robustness obligations.** SQPOLL's value proposition is low-latency submission via CPU-local polling. Delivering that property correctly requires handling all the ways the topology can change: CPU hotplug, CPU frequency scaling, NUMA rebalancing, and scheduler migration. The initial implementation optimized for the fast path and did not fully account for these transitions.
+**特定のシステムトポロジに依存する性能機能は、堅牢性に関する責務を生む。** SQPOLLの価値は、CPUローカルなポーリングによる低レイテンシの投入にある。その性質を正しく提供するには、トポロジが変化しうるあらゆる方法 — CPUホットプラグ、CPU周波数スケーリング、NUMAの再バランス、スケジューラによる移動 — を扱う必要がある。初期の実装は高速パスに最適化されており、これらの遷移を十分に考慮していなかった。
 
-**Cloud environments exercise code paths that dedicated hardware tests do not.** CPU hotplug in the middle of a running workload is uncommon on physical servers but routine in cloud environments (vCPU resizing, live migration, power management). Bugs that require this specific sequence go undetected in normal testing and appear only in production cloud deployments.
+**クラウド環境は、専用ハードウェアのテストでは通らないコードパスを実行する。** 実行中のワークロードの最中のCPUホットプラグは、物理サーバーではまれだが、クラウド環境では日常的である（vCPUのリサイズ、ライブマイグレーション、電力管理）。この特定の手順を必要とするバグは、通常のテストでは検出されず、本番のクラウド展開でのみ現れる。
 
-!!! warning "Pattern to watch for"
-    If a SQPOLL ring stops processing SQEs after a CPU topology change (hotplug, VM resize), check whether the SQPOLL thread is still running (`ps aux | grep io_uring`) and whether it has a valid CPU affinity (`taskset -p <pid>`). An affinity mask of `0x0` or containing only offline CPUs indicates the thread is stuck. Recreating the ring after the topology change is the workaround on unpatched kernels. Ensure the running kernel includes SQPOLL hotplug fixes before using `IORING_SETUP_SQ_AFF` in environments with dynamic CPU topology.
+!!! warning "注意すべきパターン"
+    CPUトポロジの変更（ホットプラグ、VMのリサイズ）の後にSQPOLLリングがSQEの処理をやめた場合は、SQPOLLスレッドがまだ動作しているか（`ps aux | grep io_uring`）、有効なCPUアフィニティを持っているか（`taskset -p <pid>`）を確認する。アフィニティマスクが`0x0`であるか、オフラインのCPUだけを含んでいる場合は、スレッドが行き詰まっていることを示す。パッチ未適用のカーネルでは、トポロジの変更後にリングを作り直すのが回避策である。動的なCPUトポロジを持つ環境で`IORING_SETUP_SQ_AFF`を使う前に、実行中のカーネルにSQPOLLのホットプラグ修正が含まれていることを確認すること。
 
 ---
 
-## Case 4: io_uring as a seccomp bypass — restrictions in Android, Chrome OS, and gVisor {#case-4-io_uring-as-a-seccomp-bypass-restrictions-in-android-chrome-os-and-gvisor}
+## ケース4: seccompバイパスとしてのio_uring — Android、Chrome OS、gVisorにおける制限 {#case-4-io_uring-as-a-seccomp-bypass-restrictions-in-android-chrome-os-and-gvisor}
 
-### Before state {#before-state_3}
+### 事前の状態 {#before-state_3}
 
-seccomp-bpf is the standard Linux mechanism for syscall filtering in sandboxes. A process installs a BPF program that is evaluated at the syscall entry point (`seccomp_run_filters`). For every syscall the process makes, the BPF program decides whether to allow it, return an error, or kill the process. This is the foundation of the sandbox in Chrome, Android apps, Flatpak applications, and container runtimes.
+seccomp-bpfは、サンドボックスにおけるシステムコールフィルタリングのためのLinuxの標準的な仕組みである。プロセスはシステムコールのエントリポイント（`seccomp_run_filters`）で評価されるBPFプログラムをインストールする。プロセスが行うすべてのシステムコールについて、BPFプログラムがそれを許可するか、エラーを返すか、プロセスを終了させるかを決める。これはChrome、Androidアプリ、Flatpakアプリケーション、コンテナランタイムにおけるサンドボックスの基盤である。
 
-The model is straightforward: work happens inside syscalls, syscalls go through the filter, the filter enforces the policy. Historically this was a sound assumption.
+モデルは単純である。作業はシステムコールの中で行われ、システムコールはフィルタを通り、フィルタがポリシーを強制する。歴史的に、これは健全な前提であった。
 
-### The trigger {#the-trigger_3}
+### きっかけ {#the-trigger_3}
 
-io_uring broke the assumption. When a process submits an `IORING_OP_OPENAT` SQE, the kernel does not immediately open the file in the context of the submitting process's syscall. Instead, if the operation cannot complete inline, it is queued to an io-wq worker thread. That thread then calls `do_filp_open()` directly — it executes the equivalent of `openat`, but from within the kernel, not through the syscall entry path. seccomp filters are evaluated at syscall entry; they are never invoked for work performed by io-wq threads.
+io_uringはこの前提を崩した。プロセスが`IORING_OP_OPENAT`のSQEを投入すると、カーネルは投入プロセスのシステムコールのコンテキストで即座にファイルを開くわけではない。代わりに、操作がインラインで完了できない場合、それはio-wqワーカースレッドにキューイングされる。そのスレッドは`do_filp_open()`を直接呼ぶ。つまり`openat`と同等のことを実行するが、システムコールのエントリパスを通らず、カーネル内部から実行する。seccompフィルタはシステムコールのエントリで評価されるので、io-wqスレッドが行う作業に対して呼び出されることは決してない。
 
-The consequence is that a process running under a strict seccomp policy that blocks `openat`, `read`, `write`, `connect`, and virtually every other syscall can still perform those operations by submitting them as io_uring SQEs. The io-wq thread, which runs with the process's UID, GID, capabilities, and open file table, carries out the operation without the seccomp filter ever being consulted.
+その結果、`openat`、`read`、`write`、`connect`をはじめほぼすべてのシステムコールをブロックする厳格なseccompポリシーの下で動作するプロセスでも、それらの操作をio_uringのSQEとして投入すれば実行できてしまう。プロセスのUID、GID、ケーパビリティ、オープンファイルテーブルを持って動作するio-wqスレッドは、seccompフィルタに一度も問い合わせることなく操作を実行する。
 
-`IORING_SETUP_SQPOLL` makes this worse. With SQPOLL, the application does not need to call `io_uring_enter` after setup — it just writes SQEs into the shared ring memory. Since `io_uring_enter` is the one syscall that could be blocked by seccomp to prevent ring usage after setup, SQPOLL eliminates even that chokepoint. An application that sets up a ring before installing its seccomp filter (or that passes a ring fd across a trust boundary) retains full I/O capability with no syscall surface for the filter to act on.
+`IORING_SETUP_SQPOLL`はこれをさらに悪化させる。SQPOLLでは、アプリケーションはセットアップ後に`io_uring_enter`を呼ぶ必要がなく、共有リングメモリにSQEを書き込むだけである。`io_uring_enter`は、セットアップ後のリング使用を防ぐためにseccompでブロックできる唯一のシステムコールであるため、SQPOLLはその関所さえも取り除いてしまう。seccompフィルタをインストールする前にリングをセットアップした（あるいは信頼境界を越えてリングのfdを渡した）アプリケーションは、フィルタが作用できるシステムコールの面が一切ないまま、完全なI/O能力を保持する。
 
-### Observed behavior {#observed-behavior_3}
+### 観測された挙動 {#observed-behavior_3}
 
-The bypass was not a single incident with a single discoverer. It was noticed independently by multiple security researchers examining io_uring's interaction with sandboxing infrastructure, and was documented publicly in the Linux security community around 2022-2023.
+このバイパスは、単一の発見者による単一のインシデントではなかった。io_uringとサンドボックス基盤の相互作用を調べていた複数のセキュリティ研究者によって独立に気づかれ、2022〜2023年ごろにLinuxセキュリティコミュニティで公に文書化された。
 
-The practical impact: any seccomp-based sandbox that allowed `io_uring_setup` (or that handed an already-created ring fd to a sandboxed process) could be bypassed for I/O operations. This affected:
+実際の影響として、`io_uring_setup`を許可していた（あるいは作成済みのリングfdをサンドボックス化されたプロセスに渡していた）seccompベースのサンドボックスは、I/O操作についてバイパスされうる状態にあった。これは次に影響した。
 
-- **Android**: app processes are subject to strict seccomp filters via Bionic's seccomp policy tables. An app that created an io_uring ring (or received a ring fd from another component) could perform arbitrary I/O regardless of its seccomp policy.
-- **Chrome OS**: renderer and GPU process sandboxes use seccomp-bpf to restrict syscalls available to potentially malicious web content. io_uring provided a path around those restrictions.
-- **gVisor**: the gVisor sentry intercepts all syscalls from guest processes to enforce its security model. io_uring's async execution model is fundamentally incompatible with sentry-level interposition — io-wq threads do not issue guest syscalls that the sentry can intercept.
+- **Android**: アプリのプロセスは、Bionicのseccompポリシーテーブルを介した厳格なseccompフィルタの対象である。io_uringリングを作成した（あるいは別のコンポーネントからリングfdを受け取った）アプリは、seccompポリシーに関係なく任意のI/Oを実行できた。
+- **Chrome OS**: レンダラーおよびGPUプロセスのサンドボックスは、悪意のある可能性があるWebコンテンツが利用できるシステムコールを制限するためにseccomp-bpfを使っている。io_uringはそれらの制限を迂回する経路を提供した。
+- **gVisor**: gVisorのsentryは、セキュリティモデルを強制するためにゲストプロセスからのすべてのシステムコールを捕捉する。io_uringの非同期実行モデルは、sentryレベルでの介在と根本的に相容れない。io-wqスレッドは、sentryが捕捉できるゲストのシステムコールを発行しないからである。
 
-### Why it happened — kernel internals {#why-it-happened-kernel-internals_3}
+### なぜ起きたか — カーネル内部 {#why-it-happened-kernel-internals_3}
 
-The seccomp model has always assumed that interesting work happens through the syscall gate. For 30 years, that assumption held: if you blocked the syscall, you blocked the capability. io_uring created a new execution path that performs equivalent work through a kernel-internal route that bypasses the gate.
+seccompのモデルは常に、意味のある作業はシステムコールの関門を通じて行われると仮定してきた。30年間、その仮定は成り立っていた。システムコールをブロックすれば、その能力もブロックできた。io_uringは、関門を迂回するカーネル内部の経路を通じて同等の作業を行う新しい実行パスを作り出した。
 
-The structural issue is in `io_uring/io-wq.c`. When an io-wq worker thread picks up a work item, it calls `io_wq_worker_running()` and proceeds to invoke the operation's handler directly (e.g., `io_openat()`, `io_read()`, `io_write()`). These handlers call the same VFS and network stack functions that syscall handlers call, but they do so without going through `syscall_enter_from_user_mode()` — and therefore without invoking `seccomp_run_filters()`.
+構造的な問題は`io_uring/io-wq.c`にある。io-wqワーカースレッドはワークアイテムを拾うと、`io_wq_worker_running()`を呼び、操作のハンドラ（例: `io_openat()`、`io_read()`、`io_write()`）を直接呼び出す。これらのハンドラはシステムコールハンドラが呼ぶのと同じVFSやネットワークスタックの関数を呼ぶが、`syscall_enter_from_user_mode()`を経由せず、したがって`seccomp_run_filters()`も呼び出さない。
 
-The kernel's own documentation acknowledges the issue. There is no simple in-kernel fix that would cause io-wq threads to re-evaluate the submitting process's seccomp policy, because the io-wq thread is a separate kernel thread that does not "belong to" the submitting process in the way a normal syscall does. Retrofitting seccomp evaluation onto io-wq work items would require either re-evaluating the filter on the io-wq thread (which changes the semantics of seccomp policies and breaks existing correct uses) or adding a new seccomp mode specifically for async work (which adds complexity and has its own risks).
+カーネル自身のドキュメントもこの問題を認めている。io-wqスレッドに投入プロセスのseccompポリシーを再評価させるような単純なカーネル内の修正は存在しない。io-wqスレッドは別個のカーネルスレッドであり、通常のシステムコールのように投入プロセスに「属している」わけではないからである。io-wqのワークアイテムに後付けでseccomp評価を組み込むには、io-wqスレッド上でフィルタを再評価する（これはseccompポリシーのセマンティクスを変え、既存の正しい使い方を壊す）か、非同期作業専用の新しいseccompモードを追加する（これは複雑さを増し、それ自体のリスクを伴う）かのどちらかが必要になる。
 
-The LSM hooks added in Linux 5.12 for io_uring (`security_uring_override_creds`, `security_uring_sqpoll`, `security_uring_cmd`) help SELinux and AppArmor enforce coarser-grained policy (e.g., deny SQPOLL thread creation) but do not provide syscall-level filtering.
+Linux 5.12でio_uring向けに追加されたLSMフック（`security_uring_override_creds`、`security_uring_sqpoll`、`security_uring_cmd`）は、SELinuxやAppArmorがより粗い粒度のポリシー（例: SQPOLLスレッドの作成を拒否する）を強制するのに役立つが、システムコールレベルのフィルタリングは提供しない。
 
-### Resolution {#resolution_3}
+### 解決 {#resolution_3}
 
-The platforms affected chose restriction over mitigation:
+影響を受けたプラットフォームは、緩和策よりも制限を選んだ。
 
-**Android 12 and later**: `io_uring_setup` is blocked by the default seccomp policy for untrusted app processes in Bionic's seccomp filter tables (`SCMP_ACT_ERRNO`). The change was introduced because the Android security team determined that the seccomp bypass risk outweighed the performance benefit for app processes. Privileged system processes (with different seccomp policies) may still use io_uring.
+**Android 12以降**: 信頼できないアプリのプロセスに対しては、Bionicのseccompフィルタテーブルのデフォルトseccompポリシーで`io_uring_setup`がブロックされている（`SCMP_ACT_ERRNO`）。この変更は、Androidセキュリティチームがアプリのプロセスにとってseccompバイパスのリスクが性能上の利益を上回ると判断したために導入された。（異なるseccompポリシーを持つ）特権システムプロセスは引き続きio_uringを使える場合がある。
 
-**Chrome OS**: the Chrome browser's sandbox policies for renderer, GPU, and utility processes were updated to block `io_uring_setup`. The policies are maintained in the Chromium source tree in the seccomp policy files for each process type.
+**Chrome OS**: Chromeブラウザのレンダラー、GPU、ユーティリティプロセスのサンドボックスポリシーが更新され、`io_uring_setup`がブロックされた。これらのポリシーは、Chromiumのソースツリー内でプロセス種別ごとのseccompポリシーファイルとして管理されている。
 
-**gVisor**: `io_uring_setup` returns `ENOSYS` by default in gVisor containers. The gVisor team's position is that supporting io_uring would require the sentry to emulate the full io-wq execution model, which is not architecturally feasible without fundamentally changing how gVisor interposes on kernel operations.
+**gVisor**: gVisorコンテナでは、デフォルトで`io_uring_setup`が`ENOSYS`を返す。gVisorチームの立場は、io_uringをサポートするにはsentryがio-wqの実行モデル全体をエミュレートする必要があり、gVisorがカーネル操作に介在する方法を根本的に変えずにそれを行うことはアーキテクチャ上不可能だというものである。
 
-**In the upstream kernel**, `IORING_SETUP_DEFER_TASKRUN` (Linux 6.1) reduces the attack surface for the SQPOLL-specific vector: with `DEFER_TASKRUN`, completions run on the submitting thread rather than on io-wq threads, meaning no separate kernel threads are spawned for completion processing. However, `DEFER_TASKRUN` does not eliminate the async io-wq path for all operations — blocking operations still go through io-wq.
+**アップストリームのカーネルでは**、`IORING_SETUP_DEFER_TASKRUN`（Linux 6.1）がSQPOLL固有の攻撃ベクトルについて攻撃面を縮小する。`DEFER_TASKRUN`では、完了処理はio-wqスレッドではなく投入スレッド上で実行されるので、完了処理のために別のカーネルスレッドが生成されることはない。しかし、`DEFER_TASKRUN`はすべての操作について非同期のio-wqパスを無くすわけではなく、ブロッキング操作は依然としてio-wqを通る。
 
-The effective mitigation for seccomp-based sandboxes remains: **block `io_uring_setup` in the seccomp policy if the process does not need it**. If the process creates a ring during initialization and then drops privileges, block `io_uring_setup` after ring creation to prevent creation of additional unrestricted rings.
+seccompベースのサンドボックスにとって有効な緩和策は依然として、**プロセスが必要としないならseccompポリシーで`io_uring_setup`をブロックする**ことである。プロセスが初期化中にリングを作成し、その後で権限を落とすのであれば、リング作成後に`io_uring_setup`をブロックし、制限のない追加のリングが作成されるのを防ぐ。
 
 ```
 # The only fully effective mitigation for seccomp sandboxes
@@ -272,76 +272,76 @@ The effective mitigation for seccomp-based sandboxes remains: **block `io_uring_
 seccomp policy rule: SCMP_SYS(io_uring_setup) -> SCMP_ACT_ERRNO(ENOSYS)
 ```
 
-### What it taught us {#what-it-taught-us_3}
+### 教訓 {#what-it-taught-us_3}
 
-**New I/O models require re-examination of security abstractions, not just addition of new hooks.** seccomp worked by controlling the syscall gate. io_uring bypassed the gate entirely for async work. The correct response was not to add io_uring-specific syscall hooks on top of seccomp — it was to recognize that the security model needed updating. Android, Chrome OS, and gVisor made the pragmatic choice: if the new interface cannot be secured within the existing model, restrict access to it.
+**新しいI/Oモデルには、新しいフックの追加だけでなく、セキュリティの抽象化そのものの再検討が必要である。** seccompはシステムコールの関門を制御することで機能していた。io_uringは非同期作業について関門を完全に迂回した。正しい対応は、seccompの上にio_uring固有のシステムコールフックを追加することではなく、セキュリティモデルを更新する必要があると認識することであった。Android、Chrome OS、gVisorは現実的な選択をした。新しいインターフェースを既存のモデルの中で安全にできないなら、それへのアクセスを制限するのである。
 
-**Performance-oriented kernel features have broader security implications than they initially appear.** io_uring was designed by I/O engineers optimizing for throughput. The seccomp implications were not the focus of the initial design. Security properties of kernel features need to be evaluated explicitly, not assumed to follow from the general syscall model.
+**性能志向のカーネル機能は、最初に見えるよりも広いセキュリティ上の影響を持つ。** io_uringは、スループットを最適化するI/Oエンジニアによって設計された。seccompへの影響は、初期設計の焦点ではなかった。カーネル機能のセキュリティ特性は、一般的なシステムコールモデルから自然に従うと仮定するのではなく、明示的に評価する必要がある。
 
-**Capability restriction is not the same as behavioral restriction.** A process that has been seccomp-filtered to deny `openat` retains the *kernel capability* to open files (it has the right UID, file permissions, etc.). seccomp restricts the *interface*, not the *capability*. io_uring exposed this distinction by providing a second interface to the same underlying capability.
+**能力の制限は、挙動の制限と同じではない。** `openat`を拒否するようseccompでフィルタリングされたプロセスも、ファイルを開く*カーネル上の能力*は保持している（正しいUID、ファイルパーミッションなどを持っている）。seccompが制限するのは*インターフェース*であって、*能力*ではない。io_uringは、同じ根底の能力への第2のインターフェースを提供することで、この区別を露呈させた。
 
-!!! warning "Pattern to watch for"
-    If a seccomp-sandboxed process shows unexpected file system or network activity that does not correspond to any syscalls visible in strace output, suspect an io_uring ring is in use. The activity will appear in kernel tracing (`bpftrace`, `opensnoop`, `tcpconnect`) but not in strace because strace observes syscall entry/exit and io-wq work bypasses the syscall path. Check `/proc/<pid>/fdinfo` for file descriptors of type `io_uring` or use `lsof` to list io_uring ring fds.
+!!! warning "注意すべきパターン"
+    seccompでサンドボックス化されたプロセスが、straceの出力に見えるどのシステムコールにも対応しない予期しないファイルシステムやネットワークの活動を示す場合は、io_uringリングが使われていることを疑うべきである。その活動はカーネルのトレーシング（`bpftrace`、`opensnoop`、`tcpconnect`）には現れるが、straceには現れない。straceはシステムコールのエントリ/エグジットを観測するものであり、io-wqの作業はシステムコールのパスを迂回するからである。`/proc/<pid>/fdinfo`で`io_uring`種別のファイルディスクリプタを確認するか、`lsof`でio_uringリングのfdを列挙する。
 
     ```bash
-    # Detect io_uring rings held by a process
+    # プロセスが保持しているio_uringリングを検出する
     ls -la /proc/<pid>/fd | grep -v ' -> /'
     grep 'io_uring' /proc/<pid>/fdinfo/*
 
-    # Trace io_uring operations without strace
+    # straceを使わずにio_uringの操作をトレースする
     bpftrace -e 'tracepoint:io_uring:io_uring_submit_sqe { printf("%s(%d): op=%d\n", comm, pid, args->opcode); }'
     ```
 
 ---
 
-## Case 5: CQ ring overflow and silent completion loss {#case-5-cq-ring-overflow-and-silent-completion-loss}
+## ケース5: CQリングのオーバーフローと完了の黙った喪失 {#case-5-cq-ring-overflow-and-silent-completion-loss}
 
-### Before state {#before-state_4}
+### 事前の状態 {#before-state_4}
 
-io_uring's completion model is built around the CQ ring: a power-of-two circular buffer of `struct io_uring_cqe` entries (completion queue entries) mapped into both kernel and user address space. The kernel writes completions into the ring by advancing the tail pointer; the application reads them by advancing the head pointer. As long as the application reads completions at least as fast as the kernel produces them, the ring never fills.
+io_uringの完了モデルはCQリングを中心に構築されている。これは`struct io_uring_cqe`エントリ（完了キューエントリ）からなる2のべき乗サイズの循環バッファで、カーネルとユーザーの両方のアドレス空間にマップされている。カーネルはtailポインタを進めて完了をリングに書き込み、アプリケーションはheadポインタを進めてそれを読む。アプリケーションがカーネルの生成速度以上の速さで完了を読む限り、リングが満杯になることはない。
 
-The CQ ring size is set at `io_uring_setup` time. The default is twice the SQ ring size (`cq_entries = sq_entries * 2`). Alternatively, `IORING_SETUP_CQSIZE` allows specifying a larger CQ at setup time.
+CQリングのサイズは`io_uring_setup`の時点で設定される。デフォルトはSQリングのサイズの2倍（`cq_entries = sq_entries * 2`）である。あるいは、`IORING_SETUP_CQSIZE`を使えばセットアップ時により大きなCQを指定できる。
 
-### The trigger {#the-trigger_4}
+### きっかけ {#the-trigger_4}
 
-If the application does not drain the CQ ring fast enough — or if a burst of completions arrives faster than the application can read them — the ring fills. The kernel cannot write new CQEs into a full ring because it cannot advance the tail past the head.
+アプリケーションがCQリングを十分速く排出しない場合 — あるいはアプリケーションが読める速度よりも速く完了のバーストが届いた場合 — リングは満杯になる。カーネルはtailをheadの先へ進められないため、満杯のリングに新しいCQEを書き込むことはできない。
 
-This is not a hypothetical: it happens in production when:
+これは仮定の話ではない。本番環境で次のような場合に起きる。
 
-- An application submits many requests in bulk and then performs a batch of unrelated work before harvesting completions.
-- The SQPOLL thread continues submitting work even while the application is sleeping or blocked elsewhere.
-- A large number of linked requests (`IOSQE_IO_LINK`) complete in rapid succession.
-- A timeout or cancellation storm produces many completions simultaneously.
+- アプリケーションが多数のリクエストを一括で投入し、その後完了を回収する前に無関係な一連の作業を行う。
+- アプリケーションがスリープしていたり他の場所でブロックしていたりする間も、SQPOLLスレッドが作業の投入を続ける。
+- 多数のリンクされたリクエスト（`IOSQE_IO_LINK`）が立て続けに完了する。
+- タイムアウトやキャンセルの嵐が同時に多数の完了を生む。
 
-### Observed behavior {#observed-behavior_4}
+### 観測された挙動 {#observed-behavior_4}
 
-When the CQ ring fills, the kernel does not block waiting for space. Instead, it increments an overflow counter in `io_ring_ctx` and — in older kernel versions — dropped the CQE on the floor entirely. In newer versions (Linux 5.9+), the kernel attempts to cache overflowed CQEs in an internal list (`io_ring_ctx->cq_overflow_list`) and flushes them to the ring when space becomes available.
+CQリングが満杯になっても、カーネルは空きを待ってブロックすることはない。代わりに`io_ring_ctx`内のオーバーフローカウンタをインクリメントし、古いカーネルバージョンではCQEを完全に捨てていた。新しいバージョン（Linux 5.9以降）では、カーネルはオーバーフローしたCQEを内部リスト（`io_ring_ctx->cq_overflow_list`）にキャッシュしようとし、空きができたときにそれらをリングへ書き出す。
 
-The consequence of the older behavior was straightforward: completions were silently dropped. An application waiting for N operations to complete would never receive some of their completions. Depending on the application's design, this caused:
+古い挙動の結果は単純であった。完了が黙って捨てられたのである。N個の操作の完了を待っているアプリケーションは、そのうちいくつかの完了を決して受け取れなかった。アプリケーションの設計によっては、これが次を引き起こした。
 
-- Permanent hangs: a coroutine or thread waiting on a completion that was dropped would never wake.
-- Incorrect state: a buffer the application considered "in flight" would remain considered in flight forever, eventually exhausting the buffer pool.
-- Resource leaks: file descriptors or registered buffers that were supposed to be released on completion would never be released.
+- 永久的なハング: 捨てられた完了を待っているコルーチンやスレッドは決して起床しない。
+- 誤った状態: アプリケーションが「処理中」とみなしたバッファは永久に処理中とみなされ続け、最終的にバッファプールを使い果たす。
+- リソースリーク: 完了時に解放されるはずだったファイルディスクリプタや登録済みバッファが決して解放されない。
 
-The newer overflow-list behavior does not drop completions, but it introduces backpressure: the kernel will not let the application submit new SQEs while the overflow list is non-empty. New submissions return `-EBUSY` or are silently not processed until the backlog is drained. An application that does not check `io_uring_enter`'s return value or does not check for the `IORING_CQ_OVERFLOW` bit in `sq_flags` could submit work that the kernel quietly holds, mistaking a stalled ring for a normally operating one.
+新しいオーバーフローリストの挙動は完了を捨てないが、バックプレッシャーを導入する。オーバーフローリストが空でない間、カーネルはアプリケーションに新しいSQEを投入させない。新しい投入は`-EBUSY`を返すか、バックログが排出されるまで黙って処理されない。`io_uring_enter`の戻り値を確認しない、あるいは`sq_flags`の`IORING_CQ_OVERFLOW`ビットを確認しないアプリケーションは、カーネルが黙って保留している作業を投入し、停滞したリングを正常に動作しているリングと取り違える可能性がある。
 
-### Why it happened — kernel internals {#why-it-happened-kernel-internals_4}
+### なぜ起きたか — カーネル内部 {#why-it-happened-kernel-internals_4}
 
-The overflow handling went through several iterations as the kernel learned what "correct" behavior should be:
+オーバーフローの処理は、カーネルが「正しい」挙動とは何かを学ぶにつれて、何度かの改訂を経た。
 
-**Linux 5.1–5.8**: Overflow CQEs were dropped. The `cq_overflow` counter in `struct io_uring` (the user-visible shared ring structure) was incremented, but many applications did not check it. The only indication to the application was the incrementing counter at `*(uint32_t *)(cqring + cqring->overflow_offset)` — a field that most application code copied from examples that did not inspect it.
+**Linux 5.1〜5.8**: オーバーフローしたCQEは捨てられた。`struct io_uring`（ユーザーから見える共有リング構造体）の`cq_overflow`カウンタはインクリメントされたが、多くのアプリケーションはそれを確認していなかった。アプリケーションへの唯一の手がかりは`*(uint32_t *)(cqring + cqring->overflow_offset)`で増えていくカウンタであり、ほとんどのアプリケーションコードは、これを検査しないサンプルからコピーされていた。
 
-**Linux 5.9**: The kernel added an internal overflow list. Instead of dropping overflowed CQEs, they are placed in `io_ring_ctx->cq_overflow_list`. The `IORING_CQ_OVERFLOW` flag is set in the CQ ring flags (`cqring->flags`). Submissions are refused with `-EBUSY` (or silently queued, depending on submission flags) until the application drains the CQ ring enough to flush the overflow list.
+**Linux 5.9**: カーネルは内部のオーバーフローリストを追加した。オーバーフローしたCQEは捨てられる代わりに`io_ring_ctx->cq_overflow_list`に置かれる。CQリングのフラグ（`cqring->flags`）に`IORING_CQ_OVERFLOW`フラグが設定される。アプリケーションがCQリングを十分に排出してオーバーフローリストを書き出せるようになるまで、投入は`-EBUSY`で拒否される（または投入フラグによっては黙ってキューイングされる）。
 
-**Linux 5.10+**: `io_uring_enter` with the `IORING_ENTER_GETEVENTS` flag will automatically flush the overflow list before returning events, ensuring that completions in the overflow list are visible to the application as long as it uses `io_uring_enter` for event harvesting.
+**Linux 5.10以降**: `IORING_ENTER_GETEVENTS`フラグ付きの`io_uring_enter`は、イベントを返す前にオーバーフローリストを自動的に書き出す。これにより、アプリケーションがイベントの回収に`io_uring_enter`を使う限り、オーバーフローリスト内の完了がアプリケーションから見えることが保証される。
 
-The root cause was a design tension: the CQ ring is a lock-free structure. The kernel writes completions by advancing the CQ tail with a store-release, and the application reads them by advancing the CQ head. There is no mutual exclusion. If the ring is full, the kernel has nowhere to write without overwriting unread entries — a destructive operation. The original implementation chose to drop rather than block (dropping is always safe for lock-free completion; blocking would require synchronization).
+根本原因は設計上の緊張関係にあった。CQリングはロックフリーな構造である。カーネルはstore-releaseでCQ tailを進めて完了を書き込み、アプリケーションはCQ headを進めてそれを読む。相互排他はない。リングが満杯なら、カーネルには未読のエントリを上書きする — 破壊的な操作 — 以外に書き込む場所がない。最初の実装は、ブロックするよりも捨てることを選んだ（ロックフリーな完了にとって捨てることは常に安全であり、ブロックするには同期が必要になる）。
 
-### Resolution {#resolution_4}
+### 解決 {#resolution_4}
 
-The behavioral fix is in the kernel (5.9+), but the application-side fix requires active participation:
+挙動の修正はカーネル（5.9以降）にあるが、アプリケーション側の修正には能動的な関与が必要である。
 
-**Check for overflow before and after harvesting completions:**
+**完了の回収の前後でオーバーフローを確認する:**
 
 ```c
 #include <liburing.h>
@@ -353,37 +353,37 @@ void drain_completions(struct io_uring *ring, int min_complete)
     int count = 0;
 
     /*
-     * Check for CQ overflow before reading completions.
-     * If IORING_CQ_OVERFLOW is set, the kernel has completions
-     * buffered internally that need to be flushed.
+     * 完了を読む前にCQオーバーフローを確認する。
+     * IORING_CQ_OVERFLOWが設定されていれば、カーネルは
+     * 書き出しが必要な完了を内部にバッファリングしている。
      */
     if (IO_URING_READ_ONCE(*ring->cq.kflags) & IORING_CQ_OVERFLOW) {
         /*
-         * Calling io_uring_enter with IORING_ENTER_GETEVENTS
-         * flushes the overflow list. liburing's io_uring_submit_and_wait
-         * does this automatically; if calling io_uring_enter directly,
-         * ensure IORING_ENTER_GETEVENTS is set.
+         * IORING_ENTER_GETEVENTS付きでio_uring_enterを呼ぶと
+         * オーバーフローリストが書き出される。liburingのio_uring_submit_and_wait
+         * はこれを自動的に行う。io_uring_enterを直接呼ぶ場合は、
+         * IORING_ENTER_GETEVENTSを必ず設定すること。
          */
         io_uring_get_events(ring);
     }
 
     io_uring_for_each_cqe(ring, head, cqe) {
-        /* process cqe->res, cqe->user_data, cqe->flags */
+        /* cqe->res、cqe->user_data、cqe->flagsを処理する */
         count++;
     }
     io_uring_cq_advance(ring, count);
 }
 ```
 
-**Size the CQ ring appropriately at setup time:**
+**セットアップ時にCQリングのサイズを適切に決める:**
 
 ```c
 struct io_uring_params params;
 memset(&params, 0, sizeof(params));
 
 /*
- * Request a larger CQ ring to absorb completion bursts.
- * Default is sq_entries * 2; for bursty workloads, use 4x or 8x.
+ * 完了のバーストを吸収するために、より大きなCQリングを要求する。
+ * デフォルトはsq_entries * 2。バースト的なワークロードでは4倍か8倍を使う。
  */
 params.flags = IORING_SETUP_CQSIZE;
 params.cq_entries = sq_entries * 8;
@@ -391,16 +391,15 @@ params.cq_entries = sq_entries * 8;
 int ring_fd = syscall(__NR_io_uring_setup, sq_entries, &params);
 ```
 
-**Monitor the overflow counter:**
+**オーバーフローカウンタを監視する:**
 
 ```c
 /*
- * The overflow counter is the number of completions that have
- * overflowed since the ring was created. It only increments
- * on kernels older than 5.9 (where they are dropped); on 5.9+
- * the counter increments but completions are preserved in the
- * overflow list. A non-zero value on any kernel version means
- * the application is not draining the CQ ring fast enough.
+ * オーバーフローカウンタは、リング作成以降にオーバーフローした
+ * 完了の数である。（完了が捨てられる）5.9より古いカーネルでのみ
+ * インクリメントされる。5.9以降ではカウンタはインクリメントされるが、
+ * 完了はオーバーフローリストに保持される。どのカーネルバージョンでも
+ * 非ゼロの値は、アプリケーションがCQリングを十分速く排出していないことを意味する。
  */
 uint32_t overflow = IO_URING_READ_ONCE(*ring->cq.koverflow);
 if (overflow > last_overflow) {
@@ -410,74 +409,74 @@ if (overflow > last_overflow) {
 }
 ```
 
-### What it taught us {#what-it-taught-us_4}
+### 教訓 {#what-it-taught-us_4}
 
-**Lock-free data structures require explicit backpressure handling.** The CQ ring's lock-free design is what makes io_uring fast, but lock-free rings do not have a natural backpressure mechanism. The application must ensure it drains the ring faster than the kernel fills it, or use a larger ring. This is a design constraint that must be communicated clearly to application authors — and it was not, in io_uring's early documentation.
+**ロックフリーなデータ構造には、明示的なバックプレッシャーの処理が必要である。** CQリングのロックフリーな設計こそがio_uringを高速にしているが、ロックフリーなリングには自然なバックプレッシャーの仕組みがない。アプリケーションは、カーネルが満たすよりも速くリングを排出するか、より大きなリングを使わなければならない。これはアプリケーションの作者に明確に伝えなければならない設計上の制約であるが、io_uringの初期のドキュメントでは伝えられていなかった。
 
-**"Set and forget" API semantics do not compose with bounded buffers.** Many event loop frameworks assume that submitting work and checking for completions are independent concerns. With io_uring, they are coupled: if the completion loop falls behind, the submission loop must slow down. Applications that submit aggressively without draining aggressively will encounter CQ overflow on any hardware, given sufficient load.
+**「設定したら放っておく」APIのセマンティクスは、有界バッファとは組み合わさらない。** 多くのイベントループフレームワークは、作業の投入と完了の確認を独立した関心事だと仮定している。io_uringでは、両者は結びついている。完了ループが遅れたら、投入ループは減速しなければならない。積極的に排出することなく積極的に投入するアプリケーションは、十分な負荷がかかればどんなハードウェア上でもCQオーバーフローに遭遇する。
 
-**Silent failure is worse than loud failure.** The initial behavior — dropping completions and incrementing a counter that few applications checked — was worse than returning an error from the submission call would have been. An application that receives `-ENOSPC` from `io_uring_enter` knows it needs to drain the ring. An application whose completions were silently dropped has no indication anything is wrong until its workload hangs.
+**黙った失敗は、騒がしい失敗よりも悪い。** 最初の挙動 — 完了を捨て、ほとんどのアプリケーションが確認しないカウンタをインクリメントする — は、投入呼び出しからエラーを返すよりも悪かった。`io_uring_enter`から`-ENOSPC`を受け取ったアプリケーションは、リングを排出する必要があるとわかる。完了が黙って捨てられたアプリケーションには、ワークロードがハングするまで何かがおかしいという手がかりが一切ない。
 
-!!! warning "Pattern to watch for"
-    Hangs in applications using io_uring where submitted operations never complete, combined with the `cq_overflow` counter in `/proc/<pid>/fdinfo/<ring_fd>` being non-zero, indicate CQ ring overflow. Check the ring's `cq_entries` size versus the depth of concurrent operations at peak load. On kernels before 5.9, some completions may have been permanently lost; on 5.9+, they are queued and will be flushed once the ring has space.
+!!! warning "注意すべきパターン"
+    io_uringを使うアプリケーションで、投入した操作が決して完了しないハングが起き、かつ`/proc/<pid>/fdinfo/<ring_fd>`の`cq_overflow`カウンタが0でない場合、CQリングのオーバーフローを示している。リングの`cq_entries`のサイズを、ピーク負荷時の並行操作の深さと比較すること。5.9より前のカーネルでは一部の完了が永久に失われた可能性がある。5.9以降では、それらはキューイングされ、リングに空きができれば書き出される。
 
     ```bash
-    # Check io_uring ring state for a running process
-    # ring_fd is the file descriptor number of the io_uring ring
+    # 実行中のプロセスのio_uringリングの状態を確認する
+    # ring_fdはio_uringリングのファイルディスクリプタ番号
     cat /proc/<pid>/fdinfo/<ring_fd>
-    # Look for:
-    #   sq_entries:  <n>     -- submission queue depth
-    #   cq_entries:  <n>     -- completion queue depth
-    #   cq_overflow: <n>     -- non-zero means overflow has occurred
-    #   sq_dropped:  <n>     -- SQEs dropped due to invalid submission
+    # 次を探す:
+    #   sq_entries:  <n>     -- 投入キューの深さ
+    #   cq_entries:  <n>     -- 完了キューの深さ
+    #   cq_overflow: <n>     -- 非ゼロならオーバーフローが発生している
+    #   sq_dropped:  <n>     -- 無効な投入により破棄されたSQE
     ```
 
 ---
 
-## Common threads {#common-threads}
+## 共通点 {#common-threads}
 
-These five incidents share a set of structural patterns worth recognizing:
+これら5つのインシデントには、認識しておく価値のある構造的なパターンが共通している。
 
-| Pattern | CVE-2022-29582 (UAF) | CVE-2023-2598 (overflow) | SQPOLL hotplug | seccomp bypass | CQ overflow |
+| パターン | CVE-2022-29582（UAF） | CVE-2023-2598（オーバーフロー） | SQPOLLホットプラグ | seccompバイパス | CQオーバーフロー |
 |---------|----------------------|--------------------------|----------------|----------------|-------------|
-| Root in resource registration path | Yes | Yes | No | No | No |
-| Concurrent access / race condition | Yes | No | Yes | No | Yes |
-| Missed interaction with external subsystem | No | No | Yes (hotplug) | Yes (seccomp) | No |
-| Silent failure mode | No | No | Partial | Yes | Yes |
-| Fixed by kernel alone | Yes | Yes | Yes | No (policy) | Partial |
-| Requires application-side hardening | No | No | Partial | Yes | Yes |
+| 根本がリソース登録パスにある | はい | はい | いいえ | いいえ | いいえ |
+| 並行アクセス / 競合状態 | はい | いいえ | はい | いいえ | はい |
+| 外部サブシステムとの相互作用の見落とし | いいえ | いいえ | はい（ホットプラグ） | はい（seccomp） | いいえ |
+| 黙った失敗モード | いいえ | いいえ | 部分的 | はい | はい |
+| カーネル単独で修正 | はい | はい | はい | いいえ（ポリシー） | 部分的 |
+| アプリケーション側の強化が必要 | いいえ | いいえ | 部分的 | はい | はい |
 
-The recurring lesson: io_uring's complexity is not primarily in its hot path — the SQE submission loop and CQE harvest loop are straightforward. The complexity is in the lifecycle management of registered resources (files, buffers, credentials), the interaction with external kernel subsystems (seccomp, CPU hotplug, scheduler), and the behavior at the boundaries of normal operation (overflow, cancellation, teardown).
+繰り返し現れる教訓は、io_uringの複雑さは主にホットパスにあるのではないということである。SQEの投入ループとCQEの回収ループは単純である。複雑さは、登録済みリソース（ファイル、バッファ、クレデンシャル）のライフサイクル管理、外部のカーネルサブシステム（seccomp、CPUホットプラグ、スケジューラ）との相互作用、そして通常運用の境界における挙動（オーバーフロー、キャンセル、後始末）にある。
 
-Bugs in io_uring tend to be discovered not through fuzzing the normal path but through exercising edge cases: races during teardown, integer boundary conditions during registration, topology changes after setup, and application behavior when the kernel pushes back.
-
----
-
-## See also {#see-also}
-
-- [Security and Hardening](security.md) — Attack surface, seccomp bypass, CVE overview, and lockdown patterns
-- [Architecture and Rings](io-uring-arch.md) — SQ/CQ layout, SQE/CQE structures, and the submission model
-- [Operations and Advanced Features](io-uring-ops.md) — Fixed buffers, SQPOLL, and the operations involved in several of these bugs
-- [Fixed Buffers](fixed-buffers.md) — Fixed buffer registration (the CVE-2023-2598 code path)
-- [Life of a Request](life-of-request.md) — How SQEs become io-wq work items (the async path underlying the seccomp bypass)
+io_uringのバグは、通常のパスをファジングすることによってではなく、エッジケースを突くことによって発見される傾向がある。後始末中の競合、登録時の整数境界条件、セットアップ後のトポロジ変更、そしてカーネルが押し返したときのアプリケーションの挙動である。
 
 ---
 
-## External references {#external-references}
+## 関連項目 {#see-also}
 
-- [CVE-2022-29582 — NVD entry](https://nvd.nist.gov/vuln/detail/CVE-2022-29582) — Affected versions and CVSS scoring
-- [Qualys CVE-2022-29582 exploitation writeup](https://www.qualys.com/2022/05/02/cve-2022-29582/lpe-io-uring.txt) — Detailed analysis of the UAF and privilege escalation technique
-- [CVE-2023-2598 — NVD entry](https://nvd.nist.gov/vuln/detail/CVE-2023-2598) — Fixed buffer integer overflow
-- [Security topics: io_uring, VM attestation, and random-reseed notifications](https://lwn.net/Articles/943239/) — LWN coverage of Google's "safe only for use by trusted components" stance and the `kernel.io_uring_disabled` sysctl
-- [Auditing io_uring](https://lwn.net/Articles/858023/) — LWN article on adding LSM and audit hooks to io_uring
-- [io_uring/rsrc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/rsrc.c) — Fixed file and buffer registration (site of both CVE-2022-29582 and CVE-2023-2598)
-- [io_uring/io-wq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/io-wq.c) — Worker thread pool (async execution path underlying the seccomp bypass)
-- [io_uring man page](https://man7.org/linux/man-pages/man7/io_uring.7.html) — `io_uring_params`, ring flags, and feature bits
+- [セキュリティとハードニング](security.md) — 攻撃面、seccompバイパス、CVEの概観、ロックダウンのパターン
+- [アーキテクチャとリング](io-uring-arch.md) — SQ/CQのレイアウト、SQE/CQE構造体、投入モデル
+- [操作と高度な機能](io-uring-ops.md) — 固定バッファ、SQPOLL、そしてこれらのバグのいくつかに関わる操作
+- [固定バッファ](fixed-buffers.md) — 固定バッファの登録（CVE-2023-2598のコードパス）
+- [リクエストの一生](life-of-request.md) — SQEがどのようにio-wqのワークアイテムになるか（seccompバイパスの根底にある非同期パス）
 
-## Further reading {#further-reading}
+---
 
-- [security.md](security.md) — Full treatment of the seccomp bypass (Case 4), `IORING_REGISTER_RESTRICTIONS`, and per-platform lockdown decisions
-- [fixed-buffers.md](fixed-buffers.md) — How fixed buffer registration works and the performance trade-offs that made the CVE-2023-2598 code path attractive to attackers
-- [life-of-request.md](life-of-request.md) — The complete lifecycle from SQE write to CQE harvest, including the io-wq offload path that bypasses seccomp
-- [liburing documentation](https://github.com/axboe/liburing) — The reference userspace library; `io_uring_get_events()` and overflow handling are documented in the API reference
-- [io_uring.c changelog in kernel git](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/io_uring/io_uring.c) — Commit history showing the progression of security fixes and overflow handling improvements
+## 外部参考資料 {#external-references}
+
+- [CVE-2022-29582 — NVD entry](https://nvd.nist.gov/vuln/detail/CVE-2022-29582) — 影響を受けるバージョンとCVSSスコア
+- [Qualys CVE-2022-29582 exploitation writeup](https://www.qualys.com/2022/05/02/cve-2022-29582/lpe-io-uring.txt) — UAFと権限昇格手法の詳細な分析
+- [CVE-2023-2598 — NVD entry](https://nvd.nist.gov/vuln/detail/CVE-2023-2598) — 固定バッファの整数オーバーフロー
+- [Security topics: io_uring, VM attestation, and random-reseed notifications](https://lwn.net/Articles/943239/) — Googleの「信頼できるコンポーネントによる使用に限り安全」という立場と`kernel.io_uring_disabled` sysctlに関するLWNの記事
+- [Auditing io_uring](https://lwn.net/Articles/858023/) — io_uringへのLSMおよび監査フックの追加に関するLWNの記事
+- [io_uring/rsrc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/rsrc.c) — 固定ファイルとバッファの登録（CVE-2022-29582とCVE-2023-2598の両方の発生箇所）
+- [io_uring/io-wq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/io-wq.c) — ワーカースレッドプール（seccompバイパスの根底にある非同期実行パス）
+- [io_uring man page](https://man7.org/linux/man-pages/man7/io_uring.7.html) — `io_uring_params`、リングフラグ、機能ビット
+
+## 参考文献 {#further-reading}
+
+- [security.md](security.md) — seccompバイパス（ケース4）、`IORING_REGISTER_RESTRICTIONS`、プラットフォームごとのロックダウンの判断についての詳しい解説
+- [fixed-buffers.md](fixed-buffers.md) — 固定バッファの登録の仕組みと、CVE-2023-2598のコードパスを攻撃者にとって魅力的なものにした性能上のトレードオフ
+- [life-of-request.md](life-of-request.md) — SQEの書き込みからCQEの回収までの完全なライフサイクル（seccompを迂回するio-wqオフロードパスを含む）
+- [liburing documentation](https://github.com/axboe/liburing) — リファレンスとなるユーザー空間ライブラリ。`io_uring_get_events()`とオーバーフローの処理はAPIリファレンスに記載されている
+- [io_uring.c changelog in kernel git](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/log/io_uring/io_uring.c) — セキュリティ修正とオーバーフロー処理の改善の進展を示すコミット履歴

@@ -1,82 +1,82 @@
-# Life of an io_uring request {#life-of-an-io_uring-request}
+# io_uringリクエストの一生 {#life-of-an-io_uring-request}
 
-> Tracing a single read from SQE submission to CQE completion
+> SQEの投入からCQEの完了まで、1回のreadを追跡する
 
-## What happens when you submit an io_uring read? {#what-happens-when-you-submit-an-io_uring-read}
+## io_uringでreadを投入すると何が起きるか {#what-happens-when-you-submit-an-io_uring-read}
 
-When a program submits a read via io_uring, it writes a Submission Queue Entry (SQE) into a shared-memory ring, then optionally calls `io_uring_enter(2)` to hand control to the kernel. The kernel picks up the SQE, attempts to execute the read immediately (the inline fast path), and if that would block, offloads the work to an io-wq worker thread. Either way, when the read finishes the kernel writes a Completion Queue Entry (CQE) into the completion ring, and userspace reaps it.
+プログラムがio_uring経由でreadを投入すると、共有メモリ上のリングにSubmission Queue Entry（SQE）を書き込み、必要に応じて`io_uring_enter(2)`を呼んで制御をカーネルに渡す。カーネルはSQEを取り出してreadを即座に実行しようと試み（インライン高速パス）、それがブロックするようであれば処理をio-wqワーカースレッドにオフロードする。いずれの場合も、readが終わるとカーネルはCompletion Queue Entry（CQE）を完了リングに書き込み、ユーザー空間がそれを回収する。
 
 ```mermaid
 flowchart TD
-    A["Userspace: io_uring_prep_read(sqe, fd, buf, len, offset)<br/>advance SQ tail"] --> B
+    A["ユーザー空間: io_uring_prep_read(sqe, fd, buf, len, offset)<br/>SQ tailを進める"] --> B
 
-    B["io_uring_enter(2)<br/>— or SQPOLL thread wakes —<br/>io_submit_sqes() → io_queue_sqe() → io_issue_sqe()"]
+    B["io_uring_enter(2)<br/>— またはSQPOLLスレッドが起床 —<br/>io_submit_sqes() → io_queue_sqe() → io_issue_sqe()"]
     B --> C
 
-    C{"Can complete\nwithout blocking?"}
+    C{"ブロックせずに\n完了できるか?"}
 
-    C -->|"Yes — cache hit,\nnon-blocking socket"| D["<b>Inline fast path</b><br/>io_read() → call_read_iter()<br/>data copied in task context"]
+    C -->|"はい — キャッシュヒット、\nノンブロッキングソケット"| D["<b>インライン高速パス</b><br/>io_read() → call_read_iter()<br/>タスクコンテキストでデータをコピー"]
 
-    C -->|"No — page fault,\nO_DIRECT on HDD,\nblocking device"| E["<b>io-wq async path</b><br/>io_req_task_work_add()<br/>→ io_wq_enqueue()"]
+    C -->|"いいえ — ページフォールト、\nHDD上のO_DIRECT、\nブロッキングデバイス"| E["<b>io-wq非同期パス</b><br/>io_req_task_work_add()<br/>→ io_wq_enqueue()"]
 
-    E --> F["io-wq worker thread<br/>io_read() → call_read_iter()<br/>may sleep waiting for I/O"]
+    E --> F["io-wqワーカースレッド<br/>io_read() → call_read_iter()<br/>I/O待ちでスリープすることがある"]
 
     D --> G
     F --> G
 
-    G["io_req_complete_post()<br/>io_fill_cqe_req()<br/>writes CQE to CQ ring"]
-    G --> H["Userspace: io_uring_peek_cqe()<br/>reads result, advances CQ head"]
+    G["io_req_complete_post()<br/>io_fill_cqe_req()<br/>CQEをCQリングに書き込む"]
+    G --> H["ユーザー空間: io_uring_peek_cqe()<br/>結果を読み、CQ headを進める"]
 ```
 
-The key insight: **io_uring decouples submission from completion**. The application never blocks inside the syscall waiting for a disk read to finish. It submits, does other work, and harvests completions when it is ready.
+重要な洞察は、**io_uringは投入と完了を分離している**という点である。アプリケーションはディスクreadの完了を待ってシステムコール内でブロックすることがない。投入し、他の作業をこなし、準備ができたところで完了を回収する。
 
-## Preparing the SQE {#preparing-the-sqe}
+## SQEの準備 {#preparing-the-sqe}
 
-### struct io_uring_sqe field layout {#struct-iouringsqe-field-layout}
+### struct io_uring_sqeのフィールドレイアウト {#struct-iouringsqe-field-layout}
 
-The SQE is a 64-byte structure defined in `include/uapi/linux/io_uring.h`:
+SQEは`include/uapi/linux/io_uring.h`で定義された64バイトの構造体である。
 
 ```c
 /* include/uapi/linux/io_uring.h */
 struct io_uring_sqe {
-    __u8    opcode;         /* IORING_OP_READ, IORING_OP_WRITE, ... */
-    __u8    flags;          /* IOSQE_FIXED_FILE, IOSQE_IO_LINK, etc. */
-    __u16   ioprio;         /* I/O scheduling priority (ionice class) */
-    __s32   fd;             /* target file descriptor */
+    __u8    opcode;         /* IORING_OP_READ、IORING_OP_WRITE、... */
+    __u8    flags;          /* IOSQE_FIXED_FILE、IOSQE_IO_LINK など */
+    __u16   ioprio;         /* I/Oスケジューリング優先度（ioniceクラス） */
+    __s32   fd;             /* 対象のファイルディスクリプタ */
     union {
-        __u64   off;        /* file offset for read/write */
-        __u64   addr2;      /* used by some other opcodes */
+        __u64   off;        /* read/write用のファイルオフセット */
+        __u64   addr2;      /* 他の一部のopcodeで使用 */
     };
     union {
-        __u64   addr;       /* pointer to userspace buffer */
+        __u64   addr;       /* ユーザー空間バッファへのポインタ */
         __u64   splice_off_in;
     };
-    __u32   len;            /* number of bytes to read/write */
+    __u32   len;            /* read/writeするバイト数 */
     union {
-        __kernel_rwf_t  rw_flags;   /* RWF_HIPRI, RWF_NOWAIT, etc. */
+        __kernel_rwf_t  rw_flags;   /* RWF_HIPRI、RWF_NOWAIT など */
         __u32           fsync_flags;
-        /* ... other per-opcode flags ... */
+        /* ... opcodeごとのその他のフラグ ... */
     };
-    __u64   user_data;      /* opaque tag: copied verbatim to CQE */
+    __u64   user_data;      /* 不透明なタグ: CQEにそのままコピーされる */
     union {
-        __u16   buf_index;  /* registered buffer index */
-        __u16   buf_group;  /* buffer group for automatic selection */
+        __u16   buf_index;  /* 登録済みバッファのインデックス */
+        __u16   buf_group;  /* 自動選択用のバッファグループ */
     };
-    __u16   personality;    /* credential override (see io_uring_register) */
+    __u16   personality;    /* クレデンシャルの上書き（io_uring_register参照） */
     union {
         __s32   splice_fd_in;
-        __u32   file_index; /* fixed file slot when IOSQE_FIXED_FILE */
+        __u32   file_index; /* IOSQE_FIXED_FILE時の固定ファイルスロット */
     };
     __u64   addr3;
     __u64   __pad2[1];
 };
 ```
 
-For a read operation, the meaningful fields are: `opcode`, `fd`, `off`, `addr`, `len`, `rw_flags`, and `user_data`.
+read操作で意味を持つフィールドは、`opcode`、`fd`、`off`、`addr`、`len`、`rw_flags`、`user_data`である。
 
-### What io_uring_prep_read sets {#what-iouringprep_read-sets}
+### io_uring_prep_readが設定するもの {#what-iouringprep_read-sets}
 
-liburing's `io_uring_prep_read()` is a thin wrapper that sets those fields:
+liburingの`io_uring_prep_read()`は、これらのフィールドを設定する薄いラッパーである。
 
 ```c
 /* liburing/src/include/liburing/io_uring.h */
@@ -105,14 +105,14 @@ static inline void io_uring_prep_rw(int op,
 }
 ```
 
-After returning, the caller sets `sqe->user_data` to a correlation tag — typically a pointer to an application-level request struct or a monotonic counter — so it can match the CQE back to the right operation.
+戻った後、呼び出し側は`sqe->user_data`に対応付け用のタグ（典型的にはアプリケーションレベルのリクエスト構造体へのポインタか、単調増加するカウンタ）を設定し、CQEを正しい操作と照合できるようにする。
 
-### user_data for request correlation {#user_data-for-request-correlation}
+### リクエストの対応付けのためのuser_data {#user_data-for-request-correlation}
 
-`user_data` is the only field the kernel copies unchanged from SQE to CQE. Nothing inside the kernel interprets it; it is purely a cookie for the application:
+`user_data`は、カーネルがSQEからCQEへ変更せずにコピーする唯一のフィールドである。カーネル内部では一切解釈されず、純粋にアプリケーションのためのクッキーである。
 
 ```c
-/* Typical usage */
+/* 典型的な使い方 */
 struct my_request {
     int    fd;
     char  *buf;
@@ -120,31 +120,31 @@ struct my_request {
 };
 
 struct my_request *req = alloc_request(...);
-sqe->user_data = (uint64_t)(uintptr_t) req;   /* store pointer */
+sqe->user_data = (uint64_t)(uintptr_t) req;   /* ポインタを格納 */
 
-/* ... later, when harvesting CQEs: */
+/* ... 後でCQEを回収するとき: */
 struct io_uring_cqe *cqe;
 io_uring_wait_cqe(&ring, &cqe);
 struct my_request *completed = (struct my_request *)(uintptr_t) cqe->user_data;
 ```
 
-### SQE flags {#sqe-flags}
+### SQEフラグ {#sqe-flags}
 
-The `flags` byte controls request-level behaviours independent of the opcode:
+`flags`バイトは、opcodeとは独立したリクエスト単位の挙動を制御する。
 
-| Flag | Effect |
+| フラグ | 効果 |
 |------|--------|
-| `IOSQE_FIXED_FILE` | `fd` is a slot index into the ring's registered file table, avoiding per-operation `fget`/`fput` |
-| `IOSQE_IO_DRAIN` | Do not start this SQE until all previously submitted SQEs have completed (ordering barrier) |
-| `IOSQE_IO_LINK` | Link this SQE to the next one; the next SQE is submitted only if this one succeeds |
-| `IOSQE_IO_HARDLINK` | Like `IO_LINK`, but the next SQE is submitted regardless of this one's result |
-| `IOSQE_ASYNC` | Always go through io-wq; never attempt the inline fast path |
-| `IOSQE_BUFFER_SELECT` | Let the kernel pick a buffer from a registered buffer group (`buf_group`) |
-| `IOSQE_CQE_SKIP_SUCCESS` | Do not post a CQE if the operation succeeds (useful in linked chains) |
+| `IOSQE_FIXED_FILE` | `fd`はリングの登録済みファイルテーブルへのスロットインデックスであり、操作ごとの`fget`/`fput`を回避する |
+| `IOSQE_IO_DRAIN` | それ以前に投入されたすべてのSQEが完了するまで、このSQEを開始しない（順序付けのバリア） |
+| `IOSQE_IO_LINK` | このSQEを次のSQEにリンクする。次のSQEはこのSQEが成功した場合にのみ投入される |
+| `IOSQE_IO_HARDLINK` | `IO_LINK`と同様だが、次のSQEはこのSQEの結果に関係なく投入される |
+| `IOSQE_ASYNC` | 常にio-wqを経由し、インライン高速パスを一切試みない |
+| `IOSQE_BUFFER_SELECT` | 登録済みバッファグループ（`buf_group`）からカーネルにバッファを選ばせる |
+| `IOSQE_CQE_SKIP_SUCCESS` | 操作が成功した場合はCQEを投稿しない（リンクされたチェーンで有用） |
 
-### The SQ ring as a producer-consumer queue {#the-sq-ring-as-a-producer-consumer-queue}
+### 生産者・消費者キューとしてのSQリング {#the-sq-ring-as-a-producer-consumer-queue}
 
-The SQ ring is a pair of monotonically-increasing head and tail counters in shared memory. Userspace is the sole producer; the kernel is the sole consumer:
+SQリングは、共有メモリ上にある単調増加するheadとtailのカウンタの組である。ユーザー空間が唯一の生産者であり、カーネルが唯一の消費者である。
 
 ```
 SQ ring in shared memory:
@@ -157,13 +157,13 @@ SQ ring in shared memory:
   Available to kernel: tail - head entries
 ```
 
-Userspace publishes the SQE with a store-release on `sq_ring->tail`; the kernel reads it with a load-acquire. No locks are taken on the hot path.
+ユーザー空間は`sq_ring->tail`へのstore-releaseでSQEを公開し、カーネルはそれをload-acquireで読む。ホットパスではロックは一切取られない。
 
-## Submission — entering the kernel {#submission-entering-the-kernel}
+## 投入 — カーネルへの進入 {#submission-entering-the-kernel}
 
 ### io_uring_enter(2) {#iouringenter2}
 
-After advancing the SQ tail, the application calls:
+SQ tailを進めた後、アプリケーションは次を呼び出す。
 
 ```c
 int io_uring_enter(unsigned int fd,
@@ -174,28 +174,28 @@ int io_uring_enter(unsigned int fd,
                    size_t argsz);
 ```
 
-// The argp/argsz pair replaced the earlier sigset_t argument in Linux 5.11 when IORING_ENTER_EXT_ARG was introduced.
+// argp/argszの組は、Linux 5.11でIORING_ENTER_EXT_ARGが導入された際に、以前のsigset_t引数を置き換えたものである。
 
-- `to_submit`: how many SQEs to consume from the ring.
-- `min_complete`: if `IORING_ENTER_GETEVENTS` is set in `flags`, block until at least this many CQEs are available before returning. Setting this to `0` with `IORING_ENTER_GETEVENTS` performs a non-blocking poll.
-- `IORING_ENTER_GETEVENTS`: combine submission and wait in one syscall; avoids a second `epoll_wait`-style call.
+- `to_submit`: リングから消費するSQEの数。
+- `min_complete`: `flags`に`IORING_ENTER_GETEVENTS`が設定されている場合、少なくともこの数のCQEが利用可能になるまでブロックしてから戻る。`IORING_ENTER_GETEVENTS`とともにこれを`0`にすると、ノンブロッキングのポーリングになる。
+- `IORING_ENTER_GETEVENTS`: 投入と待機を1回のシステムコールにまとめる。`epoll_wait`のような2回目の呼び出しを避けられる。
 
 ```c
-/* Submit 4 SQEs and wait for at least 1 completion */
+/* SQEを4つ投入し、少なくとも1つの完了を待つ */
 io_uring_enter(ring_fd, 4, 1, IORING_ENTER_GETEVENTS, NULL, 0);
 ```
 
-### Kernel entry point {#kernel-entry-point}
+### カーネルのエントリポイント {#kernel-entry-point}
 
-The syscall lands in `io_uring/io_uring.c`:
+システムコールは`io_uring/io_uring.c`に到達する。
 
 ```c
-/* io_uring/io_uring.c (simplified) */
+/* io_uring/io_uring.c（簡略化） */
 SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
                 u32, min_complete, u32, flags, const void __user *, argp,
                 size_t, argsz)
 {
-    struct io_ring_ctx *ctx = /* look up ctx from ring_fd */;
+    struct io_ring_ctx *ctx = /* ring_fdからctxを検索 */;
 
     if (to_submit) {
         ret = io_submit_sqes(ctx, to_submit);
@@ -211,21 +211,21 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 
 ### io_submit_sqes → io_queue_sqe → io_issue_sqe {#iosubmitsqes-ioqueuesqe-ioissuesqe}
 
-`io_submit_sqes()` loops over `to_submit` entries, calling `io_queue_sqe()` for each, which in turn calls `io_issue_sqe()`:
+`io_submit_sqes()`は`to_submit`個のエントリをループし、それぞれについて`io_queue_sqe()`を呼ぶ。これがさらに`io_issue_sqe()`を呼ぶ。
 
 ```c
-/* io_uring/io_uring.c (simplified) */
+/* io_uring/io_uring.c（簡略化） */
 static int io_submit_sqes(struct io_ring_ctx *ctx, unsigned int nr)
 {
     unsigned int i;
     int submitted = 0;
 
     for (i = 0; i < nr; i++) {
-        struct io_uring_sqe *sqe = io_get_sqe(ctx);  /* advance head */
-        struct io_kiocb *req     = io_alloc_req(ctx); /* from slab cache */
+        struct io_uring_sqe *sqe = io_get_sqe(ctx);  /* headを進める */
+        struct io_kiocb *req     = io_alloc_req(ctx); /* slabキャッシュから */
 
-        io_init_req(ctx, req, sqe);      /* copy SQE fields into req */
-        io_queue_sqe(ctx, req);          /* dispatch */
+        io_init_req(ctx, req, sqe);      /* SQEのフィールドをreqにコピー */
+        io_queue_sqe(ctx, req);          /* ディスパッチ */
         submitted++;
     }
     return submitted;
@@ -233,25 +233,25 @@ static int io_submit_sqes(struct io_ring_ctx *ctx, unsigned int nr)
 
 static void io_queue_sqe(struct io_ring_ctx *ctx, struct io_kiocb *req)
 {
-    /* Link, drain, and personality checks */
+    /* リンク、drain、personalityのチェック */
     io_issue_sqe(req, IO_URING_F_NONBLOCK);
 }
 ```
 
-`IO_URING_F_NONBLOCK` tells the per-opcode handler to use `IOCB_NOWAIT` semantics: if the operation would block, return `-EAGAIN` immediately rather than sleeping. That `-EAGAIN` is the signal to fall back to io-wq.
+`IO_URING_F_NONBLOCK`は、opcodeごとのハンドラに`IOCB_NOWAIT`のセマンティクスを使うよう指示する。つまり、操作がブロックするのであれば、スリープせずに即座に`-EAGAIN`を返す。この`-EAGAIN`がio-wqへフォールバックする合図である。
 
-### The SQPOLL path (no syscall required) {#the-sqpoll-path-no-syscall-required}
+### SQPOLLパス（システムコール不要） {#the-sqpoll-path-no-syscall-required}
 
-With `IORING_SETUP_SQPOLL`, `io_uring_setup()` creates a kernel thread (`io_sq_data`) that polls the SQ ring in a tight loop. Userspace simply writes the SQE and advances `sq_ring->tail`; the kernel thread sees it without any syscall:
+`IORING_SETUP_SQPOLL`を指定すると、`io_uring_setup()`はSQリングをタイトなループでポーリングするカーネルスレッド（`io_sq_data`）を作成する。ユーザー空間はSQEを書き込んで`sq_ring->tail`を進めるだけでよく、カーネルスレッドはシステムコールなしでそれを検出する。
 
 ```c
-/* io_uring/sqpoll.c (simplified) */
+/* io_uring/sqpoll.c（簡略化） */
 static int io_sq_thread(void *data)
 {
     struct io_sq_data *sqd = data;
 
     for (;;) {
-        /* Poll each ring this thread serves */
+        /* このスレッドが担当する各リングをポーリング */
         list_for_each_entry(ctx, &sqd->ctx_list, sqd_list) {
             unsigned int to_submit = io_sqring_entries(ctx);
             if (to_submit)
@@ -259,7 +259,7 @@ static int io_sq_thread(void *data)
         }
 
         if (idle_for_too_long) {
-            /* Set IORING_SQ_NEED_WAKEUP, then sleep */
+            /* IORING_SQ_NEED_WAKEUPを設定してからスリープ */
             atomic_or(IORING_SQ_NEED_WAKEUP, &ctx->rings->sq_flags);
             schedule();
         }
@@ -267,16 +267,16 @@ static int io_sq_thread(void *data)
 }
 ```
 
-Userspace must check `sq_ring->flags & IORING_SQ_NEED_WAKEUP` after each batch; if the bit is set, it must call `io_uring_enter()` with `IORING_ENTER_SQ_WAKEUP` to wake the kernel thread.
+ユーザー空間は各バッチの後に`sq_ring->flags & IORING_SQ_NEED_WAKEUP`を確認しなければならない。このビットが立っていれば、`IORING_ENTER_SQ_WAKEUP`を指定して`io_uring_enter()`を呼び、カーネルスレッドを起床させる必要がある。
 
-## Request dispatch — the inline fast path {#request-dispatch-the-inline-fast-path}
+## リクエストのディスパッチ — インライン高速パス {#request-dispatch-the-inline-fast-path}
 
-### io_read in io_uring/rw.c {#ioread-in-iouringrwc}
+### io_uring/rw.cのio_read {#ioread-in-iouringrwc}
 
-For `IORING_OP_READ`, `io_issue_sqe()` calls the `io_read` handler in `io_uring/rw.c`:
+`IORING_OP_READ`の場合、`io_issue_sqe()`は`io_uring/rw.c`の`io_read`ハンドラを呼ぶ。
 
 ```c
-/* io_uring/rw.c (simplified) */
+/* io_uring/rw.c（簡略化） */
 static int io_read(struct io_kiocb *req, unsigned int issue_flags)
 {
     struct io_rw      *rw    = io_kiocb_to_cmd(req, struct io_rw);
@@ -284,92 +284,92 @@ static int io_read(struct io_kiocb *req, unsigned int issue_flags)
     struct iov_iter    iter;
     ssize_t            ret;
 
-    /* 1. Set up the kiocb */
-    /* ki_pos was set from sqe->off during io_read_prep() */
+    /* 1. kiocbをセットアップ */
+    /* ki_posはio_read_prep()の中でsqe->offから設定済み */
     kiocb->ki_filp  = req->file;
 
     kiocb_set_rw_flags(kiocb, req->rw.flags);
 
-    /* 2. If IO_URING_F_NONBLOCK, add IOCB_NOWAIT so VFS won't sleep */
+    /* 2. IO_URING_F_NONBLOCKなら、VFSがスリープしないようIOCB_NOWAITを追加 */
     if (issue_flags & IO_URING_F_NONBLOCK)
         kiocb->ki_flags |= IOCB_NOWAIT;
 
-    /* 3. Build iov_iter over the user buffer */
+    /* 3. ユーザーバッファ上にiov_iterを構築 */
     import_ubuf(ITER_DEST, req->buf, req->len, &iter);
 
-    /* 4. Try to call the file system's read_iter directly */
+    /* 4. ファイルシステムのread_iterを直接呼んでみる */
     ret = call_read_iter(req->file, kiocb, &iter);
 
     if (ret == -EAGAIN && (issue_flags & IO_URING_F_NONBLOCK)) {
-        /* Inline attempt failed — needs to block */
-        return -EAGAIN;   /* caller will enqueue to io-wq */
+        /* インラインの試行が失敗 — ブロックが必要 */
+        return -EAGAIN;   /* 呼び出し側がio-wqにエンキューする */
     }
 
-    /* 5. Success or real error: complete inline */
+    /* 5. 成功または本物のエラー: インラインで完了 */
     io_req_complete_post(req, ret);
     return IOU_OK;
 }
 ```
 
-`call_read_iter()` calls `file->f_op->read_iter()`, which routes to the same `generic_file_read_iter()` path a plain `read(2)` would take — including the page cache lookup.
+`call_read_iter()`は`file->f_op->read_iter()`を呼び、これは通常の`read(2)`がたどるのと同じ`generic_file_read_iter()`のパス（ページキャッシュの検索を含む）にルーティングされる。
 
-### Conditions for staying on the inline fast path {#conditions-for-staying-on-the-inline-fast-path}
+### インライン高速パスにとどまる条件 {#conditions-for-staying-on-the-inline-fast-path}
 
-The operation stays inline (no io-wq) when:
+次の場合、操作はインラインのまま（io-wqを使わずに）処理される。
 
-1. **Page cache hit**: the page is already in memory and up-to-date; `filemap_read()` returns without sleeping.
-2. **Non-blocking socket**: data is already in the socket receive buffer; the network stack returns immediately.
-3. **`IOCB_NOWAIT` respected by the filesystem**: the filesystem checks `kiocb->ki_flags & IOCB_NOWAIT` and returns `-EAGAIN` rather than blocking, so io_uring can decide what to do.
-4. **Not HIPRI/polling**: high-priority polling (`RWF_HIPRI`) has a dedicated path; ordinary reads do not use it unless explicitly requested.
+1. **ページキャッシュヒット**: pageがすでにメモリ上にあり最新の状態である。`filemap_read()`はスリープせずに戻る。
+2. **ノンブロッキングソケット**: データがすでにソケットの受信バッファにある。ネットワークスタックは即座に戻る。
+3. **ファイルシステムが`IOCB_NOWAIT`を尊重する**: ファイルシステムが`kiocb->ki_flags & IOCB_NOWAIT`を確認し、ブロックする代わりに`-EAGAIN`を返すため、io_uringがどうするかを判断できる。
+4. **HIPRI/ポーリングではない**: 高優先度ポーリング（`RWF_HIPRI`）には専用のパスがある。通常のreadは、明示的に要求されない限りこれを使わない。
 
 ```mermaid
 flowchart TD
     A["io_issue_sqe(req, IO_URING_F_NONBLOCK)"] --> B["io_read()"]
     B --> C["kiocb->ki_flags |= IOCB_NOWAIT"]
     C --> D["call_read_iter()"]
-    D --> E{Return value?}
+    D --> E{戻り値は?}
 
-    E -->|">= 0 (bytes read)"| F["io_req_complete_post()\nCQE posted — done"]
-    E -->|"-EAGAIN\n(would block)"| G["return -EAGAIN to caller"]
-    E -->|"other -errno"| F
+    E -->|">= 0（読んだバイト数）"| F["io_req_complete_post()\nCQEを投稿 — 完了"]
+    E -->|"-EAGAIN\n（ブロックする）"| G["呼び出し側に-EAGAINを返す"]
+    E -->|"その他の-errno"| F
 
     G --> H["io_queue_async()\nio_wq_enqueue(req)"]
 ```
 
-## Request dispatch — the io-wq async path {#request-dispatch-the-io-wq-async-path}
+## リクエストのディスパッチ — io-wq非同期パス {#request-dispatch-the-io-wq-async-path}
 
-### When inline fails {#when-inline-fails}
+### インラインが失敗するとき {#when-inline-fails}
 
-The inline attempt returns `-EAGAIN` when:
+インラインの試行は次の場合に`-EAGAIN`を返す。
 
-- The requested file offset is not in the page cache (cold cache miss).
-- The file is opened `O_DIRECT` and the underlying storage cannot satisfy the request without blocking (common for HDDs with deep queues).
-- The filesystem itself returns `-EAGAIN` because it is holding a lock that would sleep (e.g., during certain ext4 journal operations).
-- The SQE has `IOSQE_ASYNC` set, forcing async unconditionally.
+- 要求されたファイルオフセットがページキャッシュにない（コールドなキャッシュミス）。
+- ファイルが`O_DIRECT`で開かれており、下位のストレージがブロックせずには要求を満たせない（深いキューを持つHDDでよくある）。
+- ファイルシステム自身が、スリープしうるロックを保持しているために`-EAGAIN`を返す（例: ext4の特定のジャーナル操作中）。
+- SQEに`IOSQE_ASYNC`が設定されており、無条件に非同期が強制される。
 
-### Enqueuing to io-wq {#enqueuing-to-io-wq}
+### io-wqへのエンキュー {#enqueuing-to-io-wq}
 
-When `io_issue_sqe()` gets `-EAGAIN` back from the opcode handler, it calls into `io_uring/io_uring.c`:
+`io_issue_sqe()`がopcodeハンドラから`-EAGAIN`を受け取ると、`io_uring/io_uring.c`の処理を呼び出す。
 
 ```c
-/* io_uring/io_uring.c (simplified) */
+/* io_uring/io_uring.c（簡略化） */
 static void io_queue_async(struct io_kiocb *req, int ret)
 {
     if (ret != -EAGAIN || (req->flags & REQ_F_NOWAIT))
         goto fail;
 
-    /* Remove NOWAIT — worker is allowed to sleep */
+    /* NOWAITを外す — ワーカーはスリープしてよい */
     req->flags &= ~REQ_F_NOWAIT;
 
-    /* Hand off to io-wq */
-    io_req_task_work_add(req);   /* or io_wq_enqueue directly */
+    /* io-wqに引き渡す */
+    io_req_task_work_add(req);   /* またはio_wq_enqueueを直接 */
 }
 ```
 
-`io_wq_enqueue()` in `io_uring/io-wq.c` adds the request to a per-CPU work queue managed by the io-wq thread pool:
+`io_uring/io-wq.c`の`io_wq_enqueue()`は、io-wqスレッドプールが管理するCPUごとのワークキューにリクエストを追加する。
 
 ```c
-/* io_uring/io-wq.c (simplified) */
+/* io_uring/io-wq.c（簡略化） */
 void io_wq_enqueue(struct io_wq *wq, struct io_wq_work *work)
 {
     struct io_wq_acct *acct = io_work_get_acct(wq, work);
@@ -378,47 +378,47 @@ void io_wq_enqueue(struct io_wq *wq, struct io_wq_work *work)
     io_wq_insert_work(wq, work);
     raw_spin_unlock(&wq->lock);
 
-    /* Wake a worker if needed */
+    /* 必要ならワーカーを起床させる */
     io_wq_wake_worker(wq, acct);
 }
 ```
 
-### The io-wq thread pool {#the-io-wq-thread-pool}
+### io-wqスレッドプール {#the-io-wq-thread-pool}
 
-io-wq maintains two classes of workers:
+io-wqは2種類のワーカーを管理する。
 
-| Class | `io_wq_acct` | Use |
+| 種類 | `io_wq_acct` | 用途 |
 |-------|-------------|-----|
-| Bounded | `IO_WQ_ACCT_BOUND` | Work that is expected to complete in finite time (most I/O) |
-| Unbounded | `IO_WQ_ACCT_UNBOUND` | Work that may take arbitrarily long (e.g., filesystem operations that block indefinitely) |
+| Bounded（有界） | `IO_WQ_ACCT_BOUND` | 有限時間で完了すると見込まれる処理（ほとんどのI/O） |
+| Unbounded（非有界） | `IO_WQ_ACCT_UNBOUND` | 任意に長くかかりうる処理（例: 無期限にブロックするファイルシステム操作） |
 
-Workers are created lazily and reaped after a configurable idle timeout. The maximum number of bounded workers can be tuned with `io_uring_register(IORING_REGISTER_IOWQ_MAX_WORKERS)`.
+ワーカーは必要になった時点で遅延的に作成され、設定可能なアイドルタイムアウトの後に回収される。boundedワーカーの最大数は`io_uring_register(IORING_REGISTER_IOWQ_MAX_WORKERS)`で調整できる。
 
-### Credential inheritance {#credential-inheritance}
+### クレデンシャルの継承 {#credential-inheritance}
 
-Each io-wq worker inherits the credentials of the task that submitted the request (`req->creds`), set during `io_init_req()`:
+各io-wqワーカーは、リクエストを投入したタスクのクレデンシャル（`req->creds`）を継承する。これは`io_init_req()`の中で設定される。
 
 ```c
-/* io_uring/io_uring.c (simplified) */
+/* io_uring/io_uring.c（簡略化） */
 static void io_init_req(struct io_ring_ctx *ctx,
                         struct io_kiocb *req,
                         const struct io_uring_sqe *sqe)
 {
-    /* ... copy fields ... */
-    req->creds = get_current_cred();   /* snapshot submitter's creds */
+    /* ... フィールドをコピー ... */
+    req->creds = get_current_cred();   /* 投入者のクレデンシャルのスナップショット */
 }
 ```
 
-The worker calls `override_creds(req->creds)` before executing the request, ensuring file permission checks see the submitting task's uid/gid, not the worker's.
+ワーカーはリクエストを実行する前に`override_creds(req->creds)`を呼び、ファイルのパーミッションチェックがワーカーのuid/gidではなく投入タスクのuid/gidを見るようにする。
 
-## Execution in io-wq {#execution-in-io-wq}
+## io-wqでの実行 {#execution-in-io-wq}
 
-### The worker executes the same io_read path {#the-worker-executes-the-same-io_read-path}
+### ワーカーは同じio_readパスを実行する {#the-worker-executes-the-same-io_read-path}
 
-The io-wq worker calls back into the same opcode dispatch table, this time without `IO_URING_F_NONBLOCK`:
+io-wqワーカーは同じopcodeディスパッチテーブルを再び呼び出すが、今度は`IO_URING_F_NONBLOCK`なしである。
 
 ```c
-/* io_uring/io-wq.c (simplified) */
+/* io_uring/io-wq.c（簡略化） */
 static void io_worker_handle_work(struct io_worker *worker,
                                   struct io_wq_acct *acct)
 {
@@ -427,33 +427,33 @@ static void io_worker_handle_work(struct io_worker *worker,
 
     override_creds(req->creds);
 
-    /* Issue without NONBLOCK — worker is free to sleep */
+    /* NONBLOCKなしで発行 — ワーカーは自由にスリープできる */
     io_issue_sqe(req, 0);
 
     revert_creds(old_creds);
 }
 ```
 
-This calls `io_read()` again. This time `IOCB_NOWAIT` is not set in the kiocb, so `call_read_iter()` is free to block.
+これにより`io_read()`が再び呼ばれる。今回はkiocbに`IOCB_NOWAIT`が設定されていないため、`call_read_iter()`は自由にブロックできる。
 
-### The page fault path {#the-page-fault-path}
+### ページフォールトのパス {#the-page-fault-path}
 
-If the page is not in the page cache, `filemap_read()` calls into the readahead engine and then blocks on `folio_wait_locked()` until the disk I/O completes:
+pageがページキャッシュにない場合、`filemap_read()`はreadaheadエンジンを呼び出し、その後ディスクI/Oが完了するまで`folio_wait_locked()`でブロックする。
 
 ```c
-/* mm/filemap.c (simplified) */
+/* mm/filemap.c（簡略化） */
 ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
                      ssize_t already_read)
 {
     for (;;) {
         folio = filemap_get_folio(mapping, index);
         if (IS_ERR(folio)) {
-            /* Cache miss — kick readahead, allocate page */
+            /* キャッシュミス — readaheadを開始し、pageを割り当てる */
             page_cache_sync_readahead(mapping, ra, file, index, last_index - index);
             folio = filemap_get_folio(mapping, index);
         }
 
-        /* Block here until I/O completes */
+        /* I/Oが完了するまでここでブロック */
         folio_wait_locked(folio);
 
         copied = copy_folio_to_iter(folio, offset, bytes, iter);
@@ -464,41 +464,41 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 }
 ```
 
-The io-wq worker sleeps inside `folio_wait_locked()`. The block layer completes the I/O, wakes the folio's waitqueue, and the worker resumes and copies the data.
+io-wqワーカーは`folio_wait_locked()`の中でスリープする。ブロック層がI/Oを完了させ、folioの待ちキューを起こすと、ワーカーは再開してデータをコピーする。
 
-### O_DIRECT in io-wq {#o_direct-in-io-wq}
+### io-wqにおけるO_DIRECT {#o_direct-in-io-wq}
 
-For `O_DIRECT` files, `generic_file_read_iter()` bypasses the page cache entirely and calls `mapping_direct_IO()`, which builds a `bio` and submits it to the block layer. The worker blocks on the bio completion. This is the dominant path for high-performance database workloads using io_uring.
+`O_DIRECT`ファイルの場合、`generic_file_read_iter()`はページキャッシュを完全にバイパスして`mapping_direct_IO()`を呼び、これが`bio`を構築してブロック層に投入する。ワーカーはbioの完了を待ってブロックする。これは、io_uringを使う高性能データベースワークロードで主流となるパスである。
 
-## Completion — posting the CQE {#completion-posting-the-cqe}
+## 完了 — CQEの投稿 {#completion-posting-the-cqe}
 
 ### io_req_complete_post {#ioreqcomplete_post}
 
-When `io_read()` finishes (inline or in io-wq), it calls `io_req_complete_post()`:
+`io_read()`が（インラインでもio-wqでも）終わると、`io_req_complete_post()`を呼ぶ。
 
 ```c
-/* io_uring/io_uring.c (simplified) */
+/* io_uring/io_uring.c（簡略化） */
 void io_req_complete_post(struct io_kiocb *req, s32 res)
 {
     struct io_ring_ctx *ctx = req->ctx;
 
-    req->cqe.res = res;   /* bytes read, or -errno */
+    req->cqe.res = res;   /* 読んだバイト数、または-errno */
 
     spin_lock(&ctx->completion_lock);
     io_fill_cqe_req(ctx, req);
     io_commit_cqring(ctx);
     spin_unlock(&ctx->completion_lock);
 
-    io_cqring_ev_posted(ctx);   /* wake anyone sleeping in io_cqring_wait */
+    io_cqring_ev_posted(ctx);   /* io_cqring_waitでスリープしている者を起こす */
 }
 ```
 
 ### io_fill_cqe_req {#iofillcqe_req}
 
-This writes the CQE into the ring:
+これがCQEをリングに書き込む。
 
 ```c
-/* io_uring/io_uring.c (simplified) */
+/* io_uring/io_uring.c（簡略化） */
 static bool io_fill_cqe_req(struct io_ring_ctx *ctx,
                              struct io_kiocb *req)
 {
@@ -509,7 +509,7 @@ static bool io_fill_cqe_req(struct io_ring_ctx *ctx,
     tail = ctx->cached_cq_tail;
     cqe  = &rings->cqes[tail & ctx->cq_mask];
 
-    /* Write fields — user_data first so it is visible when tail advances */
+    /* フィールドを書き込む — tailが進んだときに見えるようuser_dataを先に */
     WRITE_ONCE(cqe->user_data, req->cqe.user_data);
     WRITE_ONCE(cqe->res,       req->cqe.res);
     WRITE_ONCE(cqe->flags,     req->cqe.flags);
@@ -519,21 +519,21 @@ static bool io_fill_cqe_req(struct io_ring_ctx *ctx,
 }
 ```
 
-### io_commit_cqring — the store-release {#iocommitcqring-the-store-release}
+### io_commit_cqring — store-release {#iocommitcqring-the-store-release}
 
-After writing the CQE fields, `io_commit_cqring()` advances the CQ tail with a store-release, making the entry visible to userspace:
+CQEのフィールドを書き込んだ後、`io_commit_cqring()`がstore-releaseでCQ tailを進め、エントリをユーザー空間から見えるようにする。
 
 ```c
 static void io_commit_cqring(struct io_ring_ctx *ctx)
 {
-    /* smp_store_release ensures all CQE writes are visible before tail update */
+    /* smp_store_releaseにより、tail更新の前にすべてのCQE書き込みが見えることを保証 */
     smp_store_release(&ctx->rings->cq.tail, ctx->cached_cq_tail);
 }
 ```
 
-### The CQ ring as a producer-consumer queue {#the-cq-ring-as-a-producer-consumer-queue}
+### 生産者・消費者キューとしてのCQリング {#the-cq-ring-as-a-producer-consumer-queue}
 
-The CQ ring is the mirror image of the SQ ring. The kernel is the sole producer; userspace is the sole consumer:
+CQリングはSQリングの鏡像である。カーネルが唯一の生産者であり、ユーザー空間が唯一の消費者である。
 
 ```
 CQ ring in shared memory:
@@ -545,75 +545,75 @@ CQ ring in shared memory:
   Available to userspace: tail - head entries
 ```
 
-If userspace is too slow and the CQ ring fills up, the kernel increments `cq_ring->overflow` (the "CQ overflow" counter). With `IORING_SETUP_CQ_NODROP` (implied by `IORING_FEAT_NODROP` on supported kernels), overflowed CQEs are buffered internally and drained when space becomes available.
+ユーザー空間の処理が遅すぎてCQリングが満杯になると、カーネルは`cq_ring->overflow`（「CQオーバーフロー」カウンタ）をインクリメントする。`IORING_SETUP_CQ_NODROP`（対応カーネルでは`IORING_FEAT_NODROP`によって暗黙に有効）がある場合、オーバーフローしたCQEは内部にバッファリングされ、空きができたときに排出される。
 
-### IORING_CQE_F_MORE for multishot operations {#ioringcqef_more-for-multishot-operations}
+### マルチショット操作のためのIORING_CQE_F_MORE {#ioringcqef_more-for-multishot-operations}
 
-For multishot operations (e.g., `IORING_OP_RECV` with `IORING_RECV_MULTISHOT`), the kernel may post multiple CQEs from a single SQE. As long as the operation is still active, each CQE has `IORING_CQE_F_MORE` set in `cqe->flags`. When the final CQE arrives (due to error or explicit cancellation), `IORING_CQE_F_MORE` is clear.
+マルチショット操作（例: `IORING_RECV_MULTISHOT`付きの`IORING_OP_RECV`）では、カーネルは1つのSQEから複数のCQEを投稿することがある。操作がまだ有効である限り、各CQEの`cqe->flags`には`IORING_CQE_F_MORE`が設定される。（エラーまたは明示的なキャンセルにより）最後のCQEが届くと、`IORING_CQE_F_MORE`はクリアされている。
 
 ```c
 struct io_uring_cqe {
-    __u64   user_data;  /* copied from SQE */
-    __s32   res;        /* bytes read/written, or -errno */
-    __u32   flags;      /* IORING_CQE_F_MORE, IORING_CQE_F_SOCK_NONEMPTY, ... */
+    __u64   user_data;  /* SQEからコピー */
+    __s32   res;        /* read/writeしたバイト数、または-errno */
+    __u32   flags;      /* IORING_CQE_F_MORE、IORING_CQE_F_SOCK_NONEMPTY、... */
 };
 ```
 
-## Reaping the CQE {#reaping-the-cqe}
+## CQEの回収 {#reaping-the-cqe}
 
-### io_uring_peek_cqe and io_uring_wait_cqe {#iouringpeekcqe-and-iouringwaitcqe}
+### io_uring_peek_cqeとio_uring_wait_cqe {#iouringpeekcqe-and-iouringwaitcqe}
 
-liburing provides two primitives for harvesting completions:
+liburingは完了を回収するための2つのプリミティブを提供する。
 
 ```c
-/* Non-blocking: returns 0 if a CQE is available, -EAGAIN if not */
+/* ノンブロッキング: CQEがあれば0、なければ-EAGAINを返す */
 int io_uring_peek_cqe(struct io_uring *ring, struct io_uring_cqe **cqe_ptr);
 
-/* Blocking: waits until at least one CQE is available */
+/* ブロッキング: 少なくとも1つのCQEが利用可能になるまで待つ */
 int io_uring_wait_cqe(struct io_uring *ring, struct io_uring_cqe **cqe_ptr);
 ```
 
-Internally, `io_uring_peek_cqe()` is a pure userspace operation — no syscall:
+内部的には、`io_uring_peek_cqe()`は純粋にユーザー空間だけの操作であり、システムコールを伴わない。
 
 ```c
-/* liburing (simplified) */
+/* liburing（簡略化） */
 static inline int io_uring_peek_cqe(struct io_uring *ring,
                                     struct io_uring_cqe **cqe_ptr)
 {
-    unsigned head = *ring->cq.khead;  /* atomic load */
+    unsigned head = *ring->cq.khead;  /* アトミックなロード */
     unsigned tail = io_uring_smp_load_acquire(ring->cq.ktail);
 
     if (head == tail)
-        return -EAGAIN;   /* ring empty */
+        return -EAGAIN;   /* リングは空 */
 
     *cqe_ptr = &ring->cq.cqes[head & ring->cq.ring_mask];
     return 0;
 }
 ```
 
-`io_uring_wait_cqe()` falls back to `io_uring_enter()` with `IORING_ENTER_GETEVENTS` and `min_complete=1` if the ring is empty, putting the task to sleep until the kernel posts a CQE.
+`io_uring_wait_cqe()`は、リングが空であれば`IORING_ENTER_GETEVENTS`と`min_complete=1`を指定した`io_uring_enter()`にフォールバックし、カーネルがCQEを投稿するまでタスクをスリープさせる。
 
-### io_uring_cqe_seen — advancing the CQ head {#iouringcqe_seen-advancing-the-cq-head}
+### io_uring_cqe_seen — CQ headを進める {#iouringcqe_seen-advancing-the-cq-head}
 
-After processing a CQE, the application must call `io_uring_cqe_seen()` to mark it consumed:
+CQEを処理した後、アプリケーションは`io_uring_cqe_seen()`を呼んで消費済みとしてマークしなければならない。
 
 ```c
-/* liburing (simplified) */
+/* liburing（簡略化） */
 static inline void io_uring_cqe_seen(struct io_uring *ring,
                                      struct io_uring_cqe *cqe)
 {
     if (cqe)
         io_uring_cq_advance(ring, 1);
-        /* which does: smp_store_release(ring->cq.khead,
+        /* これは次を行う: smp_store_release(ring->cq.khead,
                                          *ring->cq.khead + 1) */
 }
 ```
 
-The store-release ensures the kernel does not overwrite the CQE slot before userspace has read it.
+store-releaseにより、ユーザー空間がCQEスロットを読み終える前にカーネルがそれを上書きしないことが保証される。
 
-### Waiting with a timeout {#waiting-with-a-timeout}
+### タイムアウト付きの待機 {#waiting-with-a-timeout}
 
-To avoid blocking indefinitely, pass a `__kernel_timespec` via `IORING_ENTER_EXT_ARG`:
+無期限のブロックを避けるには、`IORING_ENTER_EXT_ARG`経由で`__kernel_timespec`を渡す。
 
 ```c
 struct io_uring_getevents_arg arg = {
@@ -627,170 +627,170 @@ io_uring_enter(ring_fd, 0, 1,
                &arg, sizeof(arg));
 ```
 
-Or use liburing's `io_uring_wait_cqe_timeout()`, which wraps this.
+あるいは、これをラップしたliburingの`io_uring_wait_cqe_timeout()`を使う。
 
-## The zero-syscall path — SQPOLL in depth {#the-zero-syscall-path-sqpoll-in-depth}
+## システムコールゼロのパス — SQPOLLの詳細 {#the-zero-syscall-path-sqpoll-in-depth}
 
-With `IORING_SETUP_SQPOLL`, the entire submit-and-complete cycle can run without any syscall:
+`IORING_SETUP_SQPOLL`を使うと、投入から完了までのサイクル全体をシステムコールなしで実行できる。
 
 ```mermaid
 flowchart LR
-    subgraph userspace["Userspace (no syscall)"]
+    subgraph userspace["ユーザー空間（システムコールなし）"]
         direction TB
-        U1["write SQE fields"]
-        U1 --> U2["advance sq_ring->tail\n(store-release)"]
-        U2 --> U3["check sq_ring->flags\nfor NEED_WAKEUP"]
-        U4["read CQE from cq_ring->cqes[head]"]
-        U4 --> U5["advance cq_ring->head\n(store-release)"]
+        U1["SQEのフィールドを書き込む"]
+        U1 --> U2["sq_ring->tailを進める\n（store-release）"]
+        U2 --> U3["sq_ring->flagsの\nNEED_WAKEUPを確認"]
+        U4["cq_ring->cqes[head]からCQEを読む"]
+        U4 --> U5["cq_ring->headを進める\n（store-release）"]
     end
 
-    subgraph kernel["Kernel SQPOLL thread"]
+    subgraph kernel["カーネルのSQPOLLスレッド"]
         direction TB
-        K1["poll sq_ring->tail\n(load-acquire)"]
+        K1["sq_ring->tailをポーリング\n（load-acquire）"]
         K1 --> K2["io_submit_sqes(ctx, n)"]
         K2 --> K3["io_issue_sqe(req,\nIO_URING_F_NONBLOCK)"]
-        K3 --> K4["inline complete:\nio_fill_cqe_req()\nadvance cq_ring->tail"]
+        K3 --> K4["インライン完了:\nio_fill_cqe_req()\ncq_ring->tailを進める"]
     end
 
-    U2 -->|shared memory| K1
-    K4 -->|shared memory| U4
+    U2 -->|共有メモリ| K1
+    K4 -->|共有メモリ| U4
 ```
 
-**The idle sleep mechanism**: after `sq_thread_idle` milliseconds without new SQEs (configurable in `io_uring_params`), the SQPOLL thread sets `IORING_SQ_NEED_WAKEUP` and calls `schedule()`. Userspace must then make one `io_uring_enter(IORING_ENTER_SQ_WAKEUP)` call to wake it. The pattern:
+**アイドルスリープの仕組み**: 新しいSQEがないまま`sq_thread_idle`ミリ秒（`io_uring_params`で設定可能）が経過すると、SQPOLLスレッドは`IORING_SQ_NEED_WAKEUP`を設定して`schedule()`を呼ぶ。その後ユーザー空間は、スレッドを起こすために`io_uring_enter(IORING_ENTER_SQ_WAKEUP)`を1回呼ばなければならない。パターンは次のとおりである。
 
 ```c
-/* After writing SQEs and advancing tail: */
+/* SQEを書き込みtailを進めた後: */
 if (IO_URING_READ_ONCE(*ring->sq.kflags) & IORING_SQ_NEED_WAKEUP) {
     io_uring_enter(ring_fd, 0, 0, IORING_ENTER_SQ_WAKEUP, NULL, 0);
 }
 ```
 
-liburing's `io_uring_submit()` performs this check automatically.
+liburingの`io_uring_submit()`はこのチェックを自動的に行う。
 
-**When SQPOLL helps most**: workloads that submit many operations per unit time, where the per-syscall overhead of `io_uring_enter()` would otherwise dominate. Database engines and network proxies with thousands of in-flight operations per second are typical users.
+**SQPOLLが最も効果を発揮するとき**: 単位時間あたりに多数の操作を投入し、そうでなければ`io_uring_enter()`のシステムコールごとのオーバーヘッドが支配的になるようなワークロード。毎秒数千の処理中操作を抱えるデータベースエンジンやネットワークプロキシが典型的な利用者である。
 
-**When SQPOLL does not help**: bursty workloads with long idle periods between bursts. The SQPOLL thread wastes CPU spinning if submissions are infrequent. In that case, regular `io_uring_enter()` submission is more appropriate.
+**SQPOLLが役に立たないとき**: バースト間に長いアイドル期間があるバースト的なワークロード。投入がまれだと、SQPOLLスレッドはスピンしてCPUを浪費する。その場合は通常の`io_uring_enter()`による投入のほうが適切である。
 
-## Key data structures {#key-data-structures}
+## 主要なデータ構造 {#key-data-structures}
 
-### struct io_ring_ctx — the kernel-side ring context {#struct-ioringctx-the-kernel-side-ring-context}
+### struct io_ring_ctx — カーネル側のリングコンテキスト {#struct-ioringctx-the-kernel-side-ring-context}
 
-`struct io_ring_ctx` is allocated once per `io_uring_setup()` call and anchors all kernel-side state:
+`struct io_ring_ctx`は`io_uring_setup()`の呼び出しごとに1つ割り当てられ、カーネル側のすべての状態の拠り所となる。
 
 ```c
-/* io_uring/io_uring.h (selected fields) */
+/* io_uring/io_uring.h（主要フィールドを抜粋） */
 struct io_ring_ctx {
-    /* Submission state */
-    struct io_rings         *rings;       /* pointer to shared SQ/CQ ring memory */
-    struct io_uring_sqe     *sq_sqes;     /* pointer to shared SQE array */
+    /* 投入の状態 */
+    struct io_rings         *rings;       /* 共有SQ/CQリングメモリへのポインタ */
+    struct io_uring_sqe     *sq_sqes;     /* 共有SQE配列へのポインタ */
     unsigned                sq_mask;      /* sq_entries - 1 */
     unsigned                cq_mask;      /* cq_entries - 1 */
-    unsigned                cached_sq_head;   /* kernel's private SQ head */
-    unsigned                cached_cq_tail;   /* kernel's private CQ tail */
+    unsigned                cached_sq_head;   /* カーネル専用のSQ head */
+    unsigned                cached_cq_tail;   /* カーネル専用のCQ tail */
 
-    /* Completion */
+    /* 完了 */
     spinlock_t              completion_lock;
-    struct list_head        locked_free_list; /* completed reqs awaiting free */
+    struct list_head        locked_free_list; /* 解放待ちの完了済みreq */
 
     /* SQPOLL */
-    struct io_sq_data       *sq_data;     /* SQPOLL thread state */
+    struct io_sq_data       *sq_data;     /* SQPOLLスレッドの状態 */
 
-    /* Async workers */
-    struct io_wq            *io_wq;       /* per-ring io-wq instance */
+    /* 非同期ワーカー */
+    struct io_wq            *io_wq;       /* リングごとのio-wqインスタンス */
 
-    /* File table (for IOSQE_FIXED_FILE) */
+    /* ファイルテーブル（IOSQE_FIXED_FILE用） */
     struct io_rsrc_data     *file_data;
     unsigned                nr_user_files;
 
-    /* Buffer table (for fixed buffers) */
+    /* バッファテーブル（固定バッファ用） */
     struct io_rsrc_data     *buf_data;
     unsigned                nr_user_bufs;
 
-    /* Credentials */
-    struct xarray           personalities; /* registered credential sets */
+    /* クレデンシャル */
+    struct xarray           personalities; /* 登録済みクレデンシャルセット */
 
-    /* Configuration */
-    unsigned                flags;        /* IORING_SETUP_* flags */
+    /* 設定 */
+    unsigned                flags;        /* IORING_SETUP_*フラグ */
 };
 ```
 
-### struct io_kiocb — the kernel-side request {#struct-io_kiocb-the-kernel-side-request}
+### struct io_kiocb — カーネル側のリクエスト {#struct-io_kiocb-the-kernel-side-request}
 
-Each submitted SQE is represented internally as a `struct io_kiocb` ("kiocb" because it embeds a `struct kiocb` for VFS integration):
+投入された各SQEは、内部では`struct io_kiocb`として表現される（「kiocb」という名前は、VFSとの統合のために`struct kiocb`を埋め込んでいることに由来する）。
 
 ```c
-/* io_uring/io_uring.h (selected fields) */
+/* io_uring/io_uring.h（主要フィールドを抜粋） */
 struct io_kiocb {
-    struct file             *file;    /* resolved file pointer (standalone field) */
+    struct file             *file;    /* 解決済みのファイルポインタ（独立したフィールド） */
 
-    struct io_ring_ctx      *ctx;     /* owning ring */
-    struct io_uring_task    *tctx;    /* submitting task's io_uring state */
+    struct io_ring_ctx      *ctx;     /* 所属するリング */
+    struct io_uring_task    *tctx;    /* 投入タスクのio_uring状態 */
 
-    /* CQE being built */
-    struct io_uring_cqe      cqe;    /* user_data, res, flags */
+    /* 構築中のCQE */
+    struct io_uring_cqe      cqe;    /* user_data、res、flags */
 
-    /* Request flags (REQ_F_*) */
+    /* リクエストフラグ（REQ_F_*） */
     unsigned long            flags;
 
-    /* Work item for io-wq */
+    /* io-wq用のワークアイテム */
     struct io_wq_work        work;
 
-    /* Reference counting for linked/multishot requests */
+    /* リンク/マルチショットリクエストのための参照カウント */
     atomic_t                 refs;
 
-    /* Credentials snapshot */
+    /* クレデンシャルのスナップショット */
     const struct cred        *creds;
 
-    /* Linked request chain */
+    /* リンクされたリクエストのチェーン */
     struct io_kiocb          *link;
 
-    /* Cleanup / free */
+    /* 後始末 / 解放 */
     struct callback_head      task_work;
 
-    /* Command-specific data lives in a flexible array at the end of the
-     * struct, accessed via io_kiocb_to_cmd(req, struct io_rw) etc.
-     * file is NOT in a union with command data. */
-    u8                        cmd[];  /* e.g. struct io_rw, struct io_poll_iocb */
+    /* コマンド固有のデータは構造体末尾のフレキシブル配列に置かれ、
+     * io_kiocb_to_cmd(req, struct io_rw) などでアクセスする。
+     * fileはコマンドデータとunionになっていない。 */
+    u8                        cmd[];  /* 例: struct io_rw、struct io_poll_iocb */
 };
 ```
 
-### Relationship between structures {#relationship-between-structures}
+### 構造体間の関係 {#relationship-between-structures}
 
 ```mermaid
 flowchart LR
-    subgraph userspace["Userspace memory (shared)"]
-        SQE["struct io_uring_sqe\n[SQE array]"]
-        CQE["struct io_uring_cqe\n[CQ ring]"]
-        SQR["SQ ring\n(head/tail/array)"]
-        CQR["CQ ring\n(head/tail)"]
+    subgraph userspace["ユーザー空間メモリ（共有）"]
+        SQE["struct io_uring_sqe\n[SQE配列]"]
+        CQE["struct io_uring_cqe\n[CQリング]"]
+        SQR["SQリング\n(head/tail/array)"]
+        CQR["CQリング\n(head/tail)"]
     end
 
-    subgraph kernel["Kernel memory"]
-        CTX["struct io_ring_ctx\n(one per ring_fd)"]
-        REQ["struct io_kiocb\n(one per in-flight SQE)"]
-        WQ["struct io_wq\n(thread pool)"]
+    subgraph kernel["カーネルメモリ"]
+        CTX["struct io_ring_ctx\n(ring_fdごとに1つ)"]
+        REQ["struct io_kiocb\n(処理中のSQEごとに1つ)"]
+        WQ["struct io_wq\n(スレッドプール)"]
     end
 
-    SQR -->|"array[i] = sqe index"| SQE
-    SQE -->|"io_init_req() copies fields"| REQ
-    REQ -->|"part of"| CTX
-    CTX -->|"owns"| WQ
-    REQ -->|"io_fill_cqe_req() writes"| CQE
-    CQE -->|"visible via"| CQR
+    SQR -->|"array[i] = sqeインデックス"| SQE
+    SQE -->|"io_init_req()がフィールドをコピー"| REQ
+    REQ -->|"の一部"| CTX
+    CTX -->|"所有"| WQ
+    REQ -->|"io_fill_cqe_req()が書き込む"| CQE
+    CQE -->|"を通して見える"| CQR
 ```
 
-`struct io_kiocb` lives in a slab cache managed by the ring context. It is allocated at submission time, lives through the entire request lifetime (inline or io-wq), and is freed after `io_fill_cqe_req()` returns.
+`struct io_kiocb`はリングコンテキストが管理するslabキャッシュに置かれる。投入時に割り当てられ、（インラインでもio-wqでも）リクエストの生存期間全体を通じて存在し、`io_fill_cqe_req()`が戻った後に解放される。
 
-## Try it yourself {#try-it-yourself}
+## 自分で試してみる {#try-it-yourself}
 
-### strace an io_uring program {#strace-an-io_uring-program}
+### io_uringプログラムをstraceする {#strace-an-io_uring-program}
 
 ```bash
-# Build a minimal io_uring read program (with liburing)
-# Then trace the syscalls:
+# 最小限のio_uring readプログラムをビルドする（liburing使用）
+# その後システムコールをトレースする:
 strace -e trace=io_uring_setup,io_uring_enter,io_uring_register ./your-program
 
-# You will see something like:
+# 次のような出力が見られる:
 # io_uring_setup(32, {flags=0, sq_thread_cpu=0, sq_thread_idle=0,
 #                     features=IORING_FEAT_SINGLE_MMAP|IORING_FEAT_NODROP|...,
 #                     sq_off={head=0, tail=64, ...},
@@ -800,20 +800,20 @@ strace -e trace=io_uring_setup,io_uring_enter,io_uring_register ./your-program
 # io_uring_enter(3, 1, 1, IORING_ENTER_GETEVENTS, NULL, 0) = 1
 ```
 
-With SQPOLL enabled, you will see `io_uring_setup` and the initial mmaps, but no `io_uring_enter` for individual operations.
+SQPOLLを有効にすると、`io_uring_setup`と最初のmmapは見えるが、個々の操作に対する`io_uring_enter`は現れない。
 
 ### /proc/PID/fdinfo/\<ring_fd\> {#procpidfdinfo}
 
-The kernel exposes ring state via fdinfo:
+カーネルはfdinfoを通じてリングの状態を公開している。
 
 ```bash
-# Find the ring fd (usually the first fd after stdin/stdout/stderr)
+# リングのfdを見つける（通常はstdin/stdout/stderrの次の最初のfd）
 ls -la /proc/$(pgrep your-program)/fd
 
-# Dump the ring state
+# リングの状態をダンプする
 cat /proc/$(pgrep your-program)/fdinfo/3
 
-# Output (example):
+# 出力（例）:
 # pos:	0
 # flags:	02000002
 # sq entries:	32
@@ -826,37 +826,37 @@ cat /proc/$(pgrep your-program)/fdinfo/3
 # cq_overflow:	0
 ```
 
-A non-zero `cq_overflow` means CQEs were posted faster than userspace consumed them — the most common cause of missed completions.
+`cq_overflow`が0でない場合、ユーザー空間が消費するよりも速くCQEが投稿されたことを意味する。これは完了の取りこぼしの最も一般的な原因である。
 
-### ftrace io_uring tracepoints {#ftrace-io_uring-tracepoints}
+### io_uringのftrace tracepoint {#ftrace-io_uring-tracepoints}
 
-The kernel has a full set of tracepoints for io_uring activity:
+カーネルにはio_uringの活動を追うためのtracepointが一通りそろっている。
 
 ```bash
-# Enable all io_uring tracepoints
+# io_uringのtracepointをすべて有効化
 echo 1 > /sys/kernel/debug/tracing/events/io_uring/enable
 
-# Start capturing
+# キャプチャを開始
 cat /sys/kernel/debug/tracing/trace_pipe &
 
-# Run your workload...
+# ワークロードを実行...
 
-# Disable
+# 無効化
 echo 0 > /sys/kernel/debug/tracing/events/io_uring/enable
 ```
 
-Key tracepoints to watch:
+注目すべき主要なtracepoint:
 
-| Tracepoint | Fires when |
+| Tracepoint | 発火するタイミング |
 |------------|------------|
-| `io_uring:io_uring_create` | `io_uring_setup()` completes |
-| `io_uring:io_uring_submit_sqe` | An SQE is consumed from the ring |
-| `io_uring:io_uring_queue_async_work` | A request is handed to io-wq |
-| `io_uring:io_uring_defer` | A request is deferred (IOSQE_IO_DRAIN) |
-| `io_uring:io_uring_complete` | A CQE is posted to the ring |
-| `io_uring:io_uring_cqring_wait` | The caller blocks waiting for completions |
+| `io_uring:io_uring_create` | `io_uring_setup()`が完了したとき |
+| `io_uring:io_uring_submit_sqe` | SQEがリングから消費されたとき |
+| `io_uring:io_uring_queue_async_work` | リクエストがio-wqに引き渡されたとき |
+| `io_uring:io_uring_defer` | リクエストが遅延されたとき（IOSQE_IO_DRAIN） |
+| `io_uring:io_uring_complete` | CQEがリングに投稿されたとき |
+| `io_uring:io_uring_cqring_wait` | 呼び出し側が完了待ちでブロックしたとき |
 
-Example output for a single read:
+1回のreadに対する出力例:
 
 ```
 io_uring_submit_sqe:   ring 0xffff... req 0xffff... opcode=READ user_data=0x1 flags=0
@@ -864,205 +864,205 @@ io_uring_queue_async_work: ring 0xffff... req 0xffff... rw=0 op=READ flags=0 wor
 io_uring_complete:     ring 0xffff... req 0xffff... user_data=0x1 res=4096 cflags=0
 ```
 
-A `io_uring_queue_async_work` line between submit and complete means the request hit the io-wq path (the page was not in cache or the device blocked). Absence of that line means the inline fast path was taken.
+submitとcompleteの間に`io_uring_queue_async_work`の行があれば、そのリクエストはio-wqパスを通った（pageがキャッシュになかったか、デバイスがブロックした）ことを意味する。その行がなければ、インライン高速パスが使われたことを意味する。
 
-### Measure inline vs async split {#measure-inline-vs-async-split}
+### インラインと非同期の比率を測定する {#measure-inline-vs-async-split}
 
 ```bash
-# Count how often requests go async
+# リクエストが非同期になる頻度を数える
 perf stat -e 'io_uring:io_uring_queue_async_work' \
           -e 'io_uring:io_uring_submit_sqe' \
           -- ./your-io-workload
 
-# The ratio async/total tells you your cache hit rate from io_uring's perspective.
-# A cold-cache sequential read workload will show ~100% async.
-# A warm-cache workload should show close to 0% async.
+# 非同期/全体の比率から、io_uringから見たキャッシュヒット率がわかる。
+# コールドキャッシュでのシーケンシャルreadワークロードでは、ほぼ100%が非同期になる。
+# ウォームキャッシュのワークロードでは、非同期はほぼ0%になるはずである。
 ```
 
-### Inspect io-wq worker count {#inspect-io-wq-worker-count}
+### io-wqワーカー数を調べる {#inspect-io-wq-worker-count}
 
 ```bash
-# While a workload is running, check how many io-wq workers exist
+# ワークロード実行中に、io-wqワーカーがいくつ存在するかを確認する
 cat /proc/$(pgrep your-program)/status | grep Threads
 
-# Or watch for kworker-style threads named "iou-wrk-<pid>"
+# あるいは"iou-wrk-<pid>"という名前のkworker風スレッドを監視する
 ps -eLf | grep iou-wrk
 ```
 
-io-wq worker threads appear as `iou-wrk-<ring_pid>` in `ps` output. Under a heavy parallel read workload against cold storage you may see several; under a cached workload you should see none (all completions are inline).
+io-wqワーカースレッドは`ps`の出力に`iou-wrk-<ring_pid>`として現れる。コールドなストレージに対する並列度の高いreadワークロードでは複数見えることがあり、キャッシュが効いたワークロードでは1つも見えないはずである（すべての完了がインラインで行われる）。
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | What it contains |
+| ファイル | 内容 |
 |------|-----------------|
-| [`io_uring/io_uring.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/io_uring.c) | Core ring management, syscall entry, SQE dispatch, CQE posting |
-| [`io_uring/rw.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/rw.c) | `io_read`, `io_write`, `io_readv`, `io_writev` handlers |
-| [`io_uring/io-wq.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/io-wq.c) | io-wq thread pool: worker lifecycle, work queue, bounded/unbounded accounting |
-| [`io_uring/sqpoll.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/sqpoll.c) | SQPOLL kernel thread |
-| [`io_uring/io_uring.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/io_uring.h) | `struct io_ring_ctx`, `struct io_kiocb` |
-| [`include/uapi/linux/io_uring.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/io_uring.h) | ABI: `struct io_uring_sqe`, `struct io_uring_cqe`, `IORING_*` constants |
-| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | `filemap_read()`, `filemap_get_folio()` — executed by io-wq workers |
+| [`io_uring/io_uring.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/io_uring.c) | リング管理の中核、システムコールのエントリ、SQEのディスパッチ、CQEの投稿 |
+| [`io_uring/rw.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/rw.c) | `io_read`、`io_write`、`io_readv`、`io_writev`ハンドラ |
+| [`io_uring/io-wq.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/io-wq.c) | io-wqスレッドプール: ワーカーのライフサイクル、ワークキュー、bounded/unboundedのアカウンティング |
+| [`io_uring/sqpoll.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/sqpoll.c) | SQPOLLカーネルスレッド |
+| [`io_uring/io_uring.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/io_uring.h) | `struct io_ring_ctx`、`struct io_kiocb` |
+| [`include/uapi/linux/io_uring.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/io_uring.h) | ABI: `struct io_uring_sqe`、`struct io_uring_cqe`、`IORING_*`定数 |
+| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | `filemap_read()`、`filemap_get_folio()` — io-wqワーカーが実行する |
 
-## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
+## 悪名高いバグとエッジケース {#notorious-bugs-and-edge-cases}
 
-The io_uring request path is complex: it crosses the userspace/kernel boundary, involves shared mutable memory, a thread pool, and touches the VFS. Several categories of bugs have emerged.
+io_uringのリクエストパスは複雑である。ユーザー空間とカーネルの境界をまたぎ、共有された可変メモリやスレッドプールが関与し、VFSにも触れる。いくつかのカテゴリのバグが現れている。
 
 ---
 
-### Case 1: Inline completion and CQ ring overflow {#case-1-inline-completion-and-cq-ring-overflow}
+### ケース1: インライン完了とCQリングのオーバーフロー {#case-1-inline-completion-and-cq-ring-overflow}
 
-#### What happened {#what-happened}
+#### 何が起きたか {#what-happened}
 
-If userspace is slow to consume CQEs, the CQ ring can fill up. On kernels without `IORING_FEAT_NODROP`, the kernel would silently drop CQEs that did not fit, incrementing the overflow counter. Requests completed successfully in the kernel, but userspace never saw the result.
+ユーザー空間がCQEの消費に手間取ると、CQリングが満杯になりうる。`IORING_FEAT_NODROP`のないカーネルでは、カーネルは収まりきらないCQEを黙って破棄し、オーバーフローカウンタをインクリメントしていた。リクエストはカーネル内では正常に完了したが、ユーザー空間はその結果を目にすることがなかった。
 
-#### The bug {#the-bug}
+#### バグ {#the-bug}
 
-Without `IORING_FEAT_NODROP`, a program that submits faster than it reaps will silently lose completions:
+`IORING_FEAT_NODROP`がない場合、回収するよりも速く投入するプログラムは、黙って完了を失う。
 
 ```c
-/* Unsafe: submit many requests without reaping */
+/* 危険: 回収せずに多数のリクエストを投入 */
 for (int i = 0; i < 1000; i++)
     io_uring_submit(&ring);
-/* If CQ ring (default 2x SQ entries) fills up, completions are dropped */
+/* CQリング（デフォルトはSQエントリ数の2倍）が満杯になると、完了が破棄される */
 ```
 
-#### Real-world implications {#real-world-implications}
+#### 現実世界への影響 {#real-world-implications}
 
-Any application that submits bursts of requests and reaps lazily must either:
+リクエストをバースト的に投入し、のんびり回収するアプリケーションは、次のいずれかを行わなければならない。
 
-- Size the CQ ring large enough via `IORING_SETUP_CQSIZE` in `io_uring_params`, or
-- Interleave reaping with submission, or
-- Rely on `IORING_FEAT_NODROP` (available since kernel 5.5), which buffers overflowed CQEs internally.
+- `io_uring_params`の`IORING_SETUP_CQSIZE`でCQリングを十分な大きさにする。
+- 回収を投入と交互に行う。
+- `IORING_FEAT_NODROP`（カーネル5.5以降で利用可能）に頼る。これはオーバーフローしたCQEを内部にバッファリングする。
 
-#### Mitigation {#mitigation}
+#### 緩和策 {#mitigation}
 
-Check `io_uring_params.features & IORING_FEAT_NODROP` at setup time. On older kernels, monitor `cq_overflow` in `/proc/PID/fdinfo/<ring_fd>` and alert if it is non-zero.
+セットアップ時に`io_uring_params.features & IORING_FEAT_NODROP`を確認する。古いカーネルでは`/proc/PID/fdinfo/<ring_fd>`の`cq_overflow`を監視し、0でなければアラートを出す。
 
 ---
 
-### Case 2: Fixed file table races during unregistration {#case-2-fixed-file-table-races-during-unregistration}
+### ケース2: 登録解除中の固定ファイルテーブルの競合 {#case-2-fixed-file-table-races-during-unregistration}
 
-#### What happened {#what-happened_1}
+#### 何が起きたか {#what-happened_1}
 
-When userspace registers a file table with `io_uring_register(IORING_REGISTER_FILES)` and then unregisters while requests using those files are still in-flight (via io-wq), there is a window where the file pointer can be freed while the worker is still holding it.
+ユーザー空間が`io_uring_register(IORING_REGISTER_FILES)`でファイルテーブルを登録し、それらのファイルを使うリクエストが（io-wq経由で）まだ処理中のうちに登録を解除すると、ワーカーがまだファイルポインタを保持している間にそれが解放されうる時間窓が生じる。
 
-#### The bug {#the-bug_1}
+#### バグ {#the-bug_1}
 
-The kernel uses reference counting on `io_rsrc_data` to keep the file table alive until all in-flight requests complete. Bugs in the reference counting have caused use-after-free in the fixed file path:
+カーネルは`io_rsrc_data`の参照カウントを使い、処理中のすべてのリクエストが完了するまでファイルテーブルを生かしておく。この参照カウントのバグにより、固定ファイルのパスでuse-after-freeが発生したことがある。
 
 ```c
-/* Dangerous if requests are in-flight */
+/* リクエストが処理中の場合は危険 */
 io_uring_register(ring_fd, IORING_UNREGISTER_FILES, NULL, 0);
-/* Worker thread may still be executing with the just-freed file table */
+/* ワーカースレッドが、解放されたばかりのファイルテーブルでまだ実行中かもしれない */
 ```
 
-#### Real-world implications {#real-world-implications_1}
+#### 現実世界への影響 {#real-world-implications_1}
 
-Use-after-free in kernel code typically means exploitable privilege escalation or kernel crash. Several CVEs have been filed against io_uring's resource management code.
+カーネルコードにおけるuse-after-freeは、通常、悪用可能な権限昇格かカーネルクラッシュを意味する。io_uringのリソース管理コードに対しては、いくつものCVEが登録されている。
 
-#### Mitigation {#mitigation_1}
+#### 緩和策 {#mitigation_1}
 
-Always drain in-flight requests (`io_uring_register(IORING_REGISTER_SYNC_CANCEL)` or submit a barrier SQE with `IOSQE_IO_DRAIN`) before unregistering resources.
+リソースの登録を解除する前に、必ず処理中のリクエストを排出する（`io_uring_register(IORING_REGISTER_SYNC_CANCEL)`を使うか、`IOSQE_IO_DRAIN`付きのバリアSQEを投入する）。
 
 ---
 
-### Case 3: SQPOLL CPU pinning and missed wakeups {#case-3-sqpoll-cpu-pinning-and-missed-wakeups}
+### ケース3: SQPOLLのCPUピン留めとウェイクアップの取りこぼし {#case-3-sqpoll-cpu-pinning-and-missed-wakeups}
 
-#### What happened {#what-happened_2}
+#### 何が起きたか {#what-happened_2}
 
-When `IORING_SETUP_SQ_AFF` is set, the SQPOLL thread is pinned to a specific CPU. If that CPU goes offline (CPU hotplug), the SQPOLL thread stalls and the ring stops processing new SQEs — without any error to userspace.
+`IORING_SETUP_SQ_AFF`が設定されていると、SQPOLLスレッドは特定のCPUにピン留めされる。そのCPUがオフラインになると（CPUホットプラグ）、SQPOLLスレッドは停止し、リングは新しいSQEの処理をやめてしまう — しかもユーザー空間には何のエラーも返らない。
 
-#### The bug {#the-bug_2}
+#### バグ {#the-bug_2}
 
-The SQPOLL thread uses `kthread_bind()` to pin to the requested CPU. If the CPU goes offline after setup:
-1. The SQPOLL thread is migrated off (or blocked) by the hotplug code.
-2. `IORING_SQ_NEED_WAKEUP` may not be set correctly in this state.
-3. Userspace keeps writing SQEs that are never consumed.
-4. No CQEs are ever posted.
+SQPOLLスレッドは`kthread_bind()`を使って要求されたCPUにピン留めされる。セットアップ後にそのCPUがオフラインになると、次のようになる。
+1. SQPOLLスレッドはホットプラグのコードによって移動される（またはブロックされる）。
+2. この状態では`IORING_SQ_NEED_WAKEUP`が正しく設定されないことがある。
+3. ユーザー空間は、決して消費されることのないSQEを書き込み続ける。
+4. CQEは一切投稿されない。
 
-#### Mitigation {#mitigation_2}
+#### 緩和策 {#mitigation_2}
 
-Avoid `IORING_SETUP_SQ_AFF` in environments with CPU hotplug (cloud VMs with vCPU resizing, containers with CPU pinning). If you must pin, monitor `sq_head` and `sq_tail` in fdinfo: if `tail - head` grows without bound, the SQPOLL thread has stalled.
-
----
-
-### Case 4: Credential confusion in personality-switched requests {#case-4-credential-confusion-in-personality-switched-requests}
-
-#### What happened {#what-happened_3}
-
-io_uring allows submitting requests under a different credential set via `personality` in the SQE combined with `io_uring_register(IORING_REGISTER_PERSONALITY)`. A bug could allow a less-privileged credential to be promoted to a more-privileged one if the personality index was not validated correctly.
-
-#### The bug {#the-bug_3}
-
-```c
-sqe->personality = some_index;  /* which credential set to use */
-```
-
-If `some_index` is out of bounds or maps to the wrong credential set due to a race during personality unregistration, the worker thread calls `override_creds()` with the wrong creds. In the worst case, a request executes with elevated privileges.
-
-#### Real-world implications {#real-world-implications_2}
-
-Privilege escalation. Several security audits of io_uring have focused specifically on the personality mechanism, leading to tighter bounds checking and reference counting fixes.
-
-#### Mitigation {#mitigation_3}
-
-Keep personality usage to a minimum; do not share ring file descriptors across trust boundaries. See [`io_uring/security.md`](security.md) in this documentation for the full threat model.
+CPUホットプラグのある環境（vCPUのリサイズを行うクラウドVM、CPUピン留めを行うコンテナ）では`IORING_SETUP_SQ_AFF`を避ける。どうしてもピン留めする必要があるなら、fdinfoの`sq_head`と`sq_tail`を監視する。`tail - head`が際限なく増え続けるなら、SQPOLLスレッドが停止している。
 
 ---
 
-### Case 5: io-wq worker count unbounded growth {#case-5-io-wq-worker-count-unbounded-growth}
+### ケース4: personalityを切り替えたリクエストにおけるクレデンシャルの混同 {#case-4-credential-confusion-in-personality-switched-requests}
 
-#### What happened {#what-happened_4}
+#### 何が起きたか {#what-happened_3}
 
-If requests arrive faster than io-wq workers can complete them, and the per-ring worker limit is set too high (or not set), the kernel spawns many threads, exhausting the system's PID space or memory.
+io_uringでは、SQEの`personality`と`io_uring_register(IORING_REGISTER_PERSONALITY)`を組み合わせることで、別のクレデンシャルセットの下でリクエストを投入できる。personalityのインデックスが正しく検証されていないと、権限の低いクレデンシャルが権限の高いものに昇格されてしまうバグがありえた。
 
-#### The bug {#the-bug_4}
+#### バグ {#the-bug_3}
 
 ```c
-/* No limit on workers — catastrophic under pathological workloads */
-/* Default: no explicit cap, grows until system resources run out */
+sqe->personality = some_index;  /* どのクレデンシャルセットを使うか */
 ```
 
-Under a workload that intentionally blocks many io-wq workers (e.g., many O_DIRECT reads to a very slow device), a buggy application can DoS the machine.
+`some_index`が範囲外であったり、personalityの登録解除中の競合によって誤ったクレデンシャルセットに対応付けられたりすると、ワーカースレッドは誤ったクレデンシャルで`override_creds()`を呼ぶ。最悪の場合、リクエストが昇格した権限で実行される。
 
-#### Mitigation {#mitigation_4}
+#### 現実世界への影響 {#real-world-implications_2}
 
-Set an explicit worker cap during setup:
+権限昇格。io_uringに対するいくつかのセキュリティ監査はpersonalityの仕組みに特に焦点を当てており、その結果、より厳密な範囲チェックと参照カウントの修正がなされた。
+
+#### 緩和策 {#mitigation_3}
+
+personalityの使用は最小限にとどめ、リングのファイルディスクリプタを信頼境界をまたいで共有しない。脅威モデルの全体については、本ドキュメントの[`io_uring/security.md`](security.md)を参照のこと。
+
+---
+
+### ケース5: io-wqワーカー数の際限ない増加 {#case-5-io-wq-worker-count-unbounded-growth}
+
+#### 何が起きたか {#what-happened_4}
+
+io-wqワーカーが完了させるよりも速くリクエストが到着し、かつリングごとのワーカー上限が高すぎる（あるいは設定されていない）と、カーネルは多数のスレッドを生成し、システムのPID空間やメモリを使い果たす。
+
+#### バグ {#the-bug_4}
 
 ```c
-unsigned int max_workers[2] = { 64, 64 };  /* bounded, unbounded */
+/* ワーカー数に上限なし — 病的なワークロードでは壊滅的 */
+/* デフォルト: 明示的な上限なし、システムリソースが尽きるまで増える */
+```
+
+多数のio-wqワーカーを意図的にブロックさせるワークロード（例: 非常に遅いデバイスへの大量のO_DIRECT read）の下では、バグのあるアプリケーションがマシンをDoS状態に陥らせうる。
+
+#### 緩和策 {#mitigation_4}
+
+セットアップ時に明示的なワーカー上限を設定する。
+
+```c
+unsigned int max_workers[2] = { 64, 64 };  /* bounded、unbounded */
 io_uring_register(ring_fd, IORING_REGISTER_IOWQ_MAX_WORKERS,
                   max_workers, 2);
 ```
 
 ---
 
-### Summary: Lessons learned {#summary-lessons-learned}
+### まとめ: 得られた教訓 {#summary-lessons-learned}
 
-| Bug | Root Cause | Impact | Prevention |
+| バグ | 根本原因 | 影響 | 予防策 |
 |-----|------------|--------|------------|
-| **CQ overflow** | Slow CQE reaping | Lost completions | Size CQ ring; use `IORING_FEAT_NODROP` |
-| **Fixed file UAF** | Ref-count race on unregister | Crash / privilege escalation | Drain requests before unregistering resources |
-| **SQPOLL CPU offline** | CPU hotplug + kthread_bind | Ring stalls silently | Avoid `SQ_AFF` with hotplug; monitor fdinfo |
-| **Personality confusion** | Credential index race | Privilege escalation | Minimize personality use; audit boundary |
-| **Worker count explosion** | No cap on io-wq workers | DoS, OOM | Set `IORING_REGISTER_IOWQ_MAX_WORKERS` |
+| **CQオーバーフロー** | CQE回収の遅さ | 完了の喪失 | CQリングのサイズを決める。`IORING_FEAT_NODROP`を使う |
+| **固定ファイルのUAF** | 登録解除時の参照カウントの競合 | クラッシュ / 権限昇格 | リソースの登録解除前にリクエストを排出する |
+| **SQPOLLのCPUオフライン** | CPUホットプラグ + kthread_bind | リングが黙って停止する | ホットプラグ環境では`SQ_AFF`を避ける。fdinfoを監視する |
+| **personalityの混同** | クレデンシャルインデックスの競合 | 権限昇格 | personalityの使用を最小限にする。境界を監査する |
+| **ワーカー数の爆発** | io-wqワーカーに上限がない | DoS、OOM | `IORING_REGISTER_IOWQ_MAX_WORKERS`を設定する |
 
-The common thread: **io_uring's performance comes from eliminating synchronization on the hot path, but that same design makes races and resource lifetime bugs harder to detect**. Careful use of the registration and cancellation APIs is essential for correctness.
+共通するのは、**io_uringの性能はホットパスでの同期を排除することから生まれるが、その同じ設計が競合やリソースの生存期間に関するバグを検出しにくくしている**という点である。正しさのためには、登録APIとキャンセルAPIを注意深く使うことが不可欠である。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [io_uring Architecture and Rings](io-uring-arch.md) — Ring layout, `io_uring_setup`, SQE/CQE structs
-- [Operations and Advanced Features](io-uring-ops.md) — Full opcode list, SQPOLL, fixed buffers, linked requests
-- [Fixed Buffers](fixed-buffers.md) — Registered buffer internals
-- [Multishot Operations](multishot-ops.md) — `IORING_CQE_F_MORE` and repeated completions
-- [Security](security.md) — io_uring threat model and hardening
-- [Life of a file read](../mm/life-of-read.md) — The page cache path that io-wq workers traverse
+- [io_uringのアーキテクチャとリング](io-uring-arch.md) — リングのレイアウト、`io_uring_setup`、SQE/CQE構造体
+- [操作と高度な機能](io-uring-ops.md) — opcodeの全一覧、SQPOLL、固定バッファ、リンクされたリクエスト
+- [固定バッファ](fixed-buffers.md) — 登録済みバッファの内部
+- [マルチショット操作](multishot-ops.md) — `IORING_CQE_F_MORE`と繰り返しの完了
+- [セキュリティ](security.md) — io_uringの脅威モデルとハードニング
+- [ファイルreadの一生](../mm/life-of-read.md) — io-wqワーカーがたどるページキャッシュのパス
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Ringing in a new asynchronous I/O API](https://lwn.net/Articles/776703/) (2019) — Original io_uring introduction by Jonathan Corbet
-- [The rapid growth of io_uring](https://lwn.net/Articles/810414/) (2020) — Feature expansion through 5.6
-- [Security requirements for new kernel features](https://lwn.net/Articles/902466/) (2022) — What new-feature submissions (io_uring included) are expected to address on the security front
-- [Buffered I/O without page-cache thrashing](https://lwn.net/Articles/806980/) (2019) — `RWF_UNCACHED`, a buffered-I/O mode that avoids polluting the page cache
+- [Ringing in a new asynchronous I/O API](https://lwn.net/Articles/776703/)（2019） — Jonathan Corbetによる最初のio_uring紹介
+- [The rapid growth of io_uring](https://lwn.net/Articles/810414/)（2020） — 5.6までの機能拡張
+- [Security requirements for new kernel features](https://lwn.net/Articles/902466/)（2022） — 新機能の投稿（io_uringを含む）がセキュリティ面で対処すべきとされる事項
+- [Buffered I/O without page-cache thrashing](https://lwn.net/Articles/806980/)（2019） — `RWF_UNCACHED`、ページキャッシュを汚さないバッファードI/Oモード
