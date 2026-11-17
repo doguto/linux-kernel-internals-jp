@@ -1,10 +1,10 @@
-# Energy-Aware Scheduling (EAS) {#energy-aware-scheduling-eas}
+# Energy-Aware Scheduling（EAS） {#energy-aware-scheduling-eas}
 
-> Minimizing energy consumption on heterogeneous CPU topologies
+> 異種CPUトポロジにおけるエネルギー消費の最小化
 
-## Motivation {#motivation}
+## 動機 {#motivation}
 
-On ARM big.LITTLE and Intel hybrid (P+E core) CPUs, different cores have different performance *and* energy characteristics. EAS was originally merged in Linux 5.0 for ARM big.LITTLE by Quentin Perret (ARM) — [`732cd75b8c92`](https://git.kernel.org/linus/732cd75b8c920d3727e69957b14faa7c2d7c3b75) ([patch series](https://lore.kernel.org/lkml/20181203095628.11858-1-quentin.perret@arm.com/), [LWN](https://lwn.net/Articles/772475/)). Intel hybrid (P+E core) support was added in Linux 6.16 by Rafael J. Wysocki — [`7b010f9b9061`](https://git.kernel.org/linus/7b010f9b906107ae4e5ac626329ab818b3f0a6b6).
+ARMのbig.LITTLEやIntelのハイブリッド（P+Eコア）CPUでは、コアごとに性能*と*エネルギー特性が異なる。EASはもともとARM big.LITTLE向けに、Quentin Perret（ARM）によってLinux 5.0でマージされた — [`732cd75b8c92`](https://git.kernel.org/linus/732cd75b8c920d3727e69957b14faa7c2d7c3b75)（[パッチシリーズ](https://lore.kernel.org/lkml/20181203095628.11858-1-quentin.perret@arm.com/)、[LWN](https://lwn.net/Articles/772475/)）。Intelのハイブリッド（P+Eコア）のサポートは、Rafael J. WysockiによってLinux 6.16で追加された — [`7b010f9b9061`](https://git.kernel.org/linus/7b010f9b906107ae4e5ac626329ab818b3f0a6b6)。
 
 ```
 ARM big.LITTLE:
@@ -16,53 +16,53 @@ Intel Alder Lake:
   E-cores (Gracemont):   lower performance, lower power
 ```
 
-A compute-intensive task should run on a big/P-core. An idle background task should park on a LITTLE/E-core. EAS makes this decision based on an energy model of the hardware.
+計算集約的なタスクはbig/Pコアで実行すべきである。アイドル気味のバックグラウンドタスクはLITTLE/Eコアに置いておくべきである。EASは、ハードウェアのエネルギーモデルに基づいてこの判断を行う。
 
-## Energy model {#energy-model}
+## エネルギーモデル {#energy-model}
 
-The energy model describes the power consumption of each CPU at different utilization levels:
+エネルギーモデルは、異なる使用率のレベルにおける各CPUの消費電力を記述する:
 
 ```c
 /* include/linux/energy_model.h */
 struct em_perf_state {
     unsigned long frequency;  /* kHz */
     unsigned long power;      /* mW */
-    unsigned long cost;       /* power * max_freq / frequency (normalized) */
+    unsigned long cost;       /* power * max_freq / frequency（正規化済み） */
     unsigned long flags;
 };
 
 struct em_perf_domain {
-    struct em_perf_state   *table;      /* performance states (P-states) */
+    struct em_perf_state   *table;      /* 性能状態（P-state） */
     int                     nr_perf_states;
     unsigned long           flags;
-    struct cpumask          cpus;       /* CPUs in this domain */
+    struct cpumask          cpus;       /* このドメイン内のCPU */
 };
 ```
 
-The energy model is registered by cpufreq drivers or device tree:
+エネルギーモデルは、cpufreqドライバまたはデバイスツリーによって登録される:
 
 ```c
-/* drivers/cpufreq/cpufreq-dt.c (or ARM firmware) */
+/* drivers/cpufreq/cpufreq-dt.c（またはARMのファームウェア） */
 em_dev_register_perf_domain(cpu_dev, nr_states, &em_cb, cpumask, milliwatts);
 
-/* em_cb.active_power(dev, freq, power) — power at given frequency */
-/* em_cb.get_cost(dev, freq, cost) — optional: pre-compute cost */
+/* em_cb.active_power(dev, freq, power) — 指定周波数での電力 */
+/* em_cb.get_cost(dev, freq, cost) — 任意: コストを事前計算する */
 ```
 
-## CPU capacity {#cpu-capacity}
+## CPU能力 {#cpu-capacity}
 
-EAS models each CPU's maximum compute capacity (normalized to 1024):
+EASは、各CPUの最大計算能力（1024に正規化）をモデル化する:
 
 ```c
-/* Maximum capacity: fastest CPU = 1024 */
-/* Each CPU has capacity_orig based on its max frequency */
+/* 最大能力: 最速のCPU = 1024 */
+/* 各CPUは最大周波数に基づくcapacity_origを持つ */
 
 /* arch/arm64/kernel/topology.c */
 static void update_cpu_capacity(unsigned int cpu)
 {
     unsigned long capacity = SCHED_CAPACITY_SCALE;  /* 1024 */
 
-    /* Scale by frequency ratio vs max CPU in system */
+    /* システム内の最大CPUに対する周波数の比でスケールする */
     capacity *= per_cpu(cpu_scale, cpu);
     capacity >>= SCHED_CAPACITY_SHIFT;
 
@@ -70,11 +70,11 @@ static void update_cpu_capacity(unsigned int cpu)
 }
 ```
 
-A LITTLE core running at 1.0 GHz vs a big core at 2.5 GHz might have capacity 400 vs 1024.
+1.0 GHzで動作するLITTLEコアと2.5 GHzのbigコアなら、能力はそれぞれ400と1024といったところになる。
 
 ## find_energy_efficient_cpu {#find_energy_efficient_cpu}
 
-The core EAS function selects the CPU that minimizes total system energy:
+EASの中核となる関数は、システム全体のエネルギーを最小化するCPUを選ぶ:
 
 ```c
 /* kernel/sched/fair.c */
@@ -86,18 +86,18 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu)
     unsigned long p_util_cfs = task_util_est(p);
     int best_energy_cpu = prev_cpu;
 
-    /* For each performance domain (group of CPUs sharing frequency): */
+    /* 各性能ドメイン（周波数を共有するCPUのグループ）について: */
     for_each_perf_domain(pd) {
         pd_cpus = em_span_cpus(pd);
 
         if (!cpumask_intersects(sched_domain_span(sd), pd_cpus))
             continue;
 
-        /* Find the most energy-efficient CPU in this domain */
+        /* このドメイン内で最もエネルギー効率の良いCPUを探す */
         for_each_cpu_and(cpu, pd_cpus, sched_domain_span(sd)) {
             long energy_delta = compute_energy(pd, cpu, p, prev_cpu);
 
-            /* Does placing p on cpu reduce total energy? */
+            /* pをcpuに配置すると総エネルギーが減るか？ */
             if (cpu == prev_cpu)
                 prev_delta = energy_delta;
             else if (energy_delta < best_delta) {
@@ -107,17 +107,17 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu)
         }
     }
 
-    /* Only switch if energy saving exceeds migration cost threshold (~6%) */
+    /* エネルギーの節約がマイグレーションコストのしきい値（約6%）を超える場合のみ切り替える */
     if ((prev_delta - best_delta) > (prev_delta >> 4))
         return best_energy_cpu;
 
-    return prev_cpu;  /* stay on previous CPU */
+    return prev_cpu;  /* 前のCPUに留まる */
 }
 ```
 
 ## compute_energy {#compute_energy}
 
-Energy estimation for placing a task on a specific CPU:
+タスクを特定のCPUに配置した場合のエネルギーの推定:
 
 ```c
 /* kernel/sched/fair.c */
@@ -127,52 +127,52 @@ static long compute_energy(struct em_perf_domain *pd, int cpu,
     struct em_perf_state *ps;
     unsigned long util_sum = 0;
 
-    /* Sum utilization of all tasks that will be on CPUs in this domain */
+    /* このドメインのCPUに載ることになるすべてのタスクの使用率を合計する */
     for_each_cpu(cpu_iter, em_span_cpus(pd)) {
         unsigned long util = cpu_util_next(cpu_iter, p, cpu);
         util_sum += util;
     }
 
-    /* Find the performance state (P-state) needed to sustain util_sum */
+    /* util_sumを維持するのに必要な性能状態（P-state）を探す */
     ps = em_pd_get_efficient_state(pd, util_sum, ..., pd->nr_perf_states);
 
-    /* Energy = power * time
-       Normalized: cost = power * max_freq / freq
+    /* エネルギー = 電力 * 時間
+       正規化: cost = power * max_freq / freq
        energy ≈ cost * util_sum */
     return em_cpu_energy(pd, ps, util_sum, ...);
 }
 ```
 
-## Capacity-aware wakeup {#capacity-aware-wakeup}
+## 能力を意識した起床 {#capacity-aware-wakeup}
 
-Before EAS runs its full energy computation, a simpler capacity check prevents placing a task on a CPU that's already saturated:
+EASが完全なエネルギー計算を実行する前に、より単純な能力チェックによって、すでに飽和しているCPUにタスクを配置することを防ぐ:
 
 ```c
-/* Only run EAS if system is not overutilized */
+/* システムが過剰使用状態でない場合のみEASを実行する */
 static bool sched_energy_enabled(void)
 {
     static u64 last_check;
     u64 now;
 
-    /* Check if any CPU is overutilized */
+    /* 過剰使用状態のCPUがあるかチェックする */
     if (READ_ONCE(overutilized))
         return false;
 
     return true;
 }
 
-/* Per-CPU: is this CPU's capacity sufficient? */
+/* CPUごと: このCPUの能力は十分か？ */
 static inline bool cpu_overutilized(int cpu)
 {
     return !fits_capacity(cpu_util(cpu), capacity_of(cpu));
 }
 ```
 
-When the system is overutilized (some CPU at 100%), EAS falls back to the regular load balancer — energy optimization doesn't help when you're already maxed out.
+システムが過剰使用状態（いずれかのCPUが100%）のとき、EASは通常のロードバランサにフォールバックする。すでに限界に達しているときには、エネルギーの最適化は役に立たないからである。
 
-## Schedutil + EAS interaction {#schedutil-eas-interaction}
+## schedutilとEASの相互作用 {#schedutil-eas-interaction}
 
-EAS determines *which* CPU; schedutil determines *which frequency*:
+EASは*どの*CPUかを決め、schedutilは*どの周波数*かを決める:
 
 ```
 1. EAS: place task on CPU that minimizes total system energy
@@ -182,63 +182,63 @@ EAS determines *which* CPU; schedutil determines *which frequency*:
 ```
 
 ```bash
-# EAS is only enabled if schedutil governor is active
+# EASはschedutilガバナが有効な場合にのみ有効になる
 cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
-# schedutil  ← EAS active
-# ondemand   ← EAS disabled (falls back to load balancing)
+# schedutil  ← EASが有効
+# ondemand   ← EASは無効（負荷分散にフォールバックする）
 ```
 
-## Observing EAS {#observing-eas}
+## EASを観察する {#observing-eas}
 
 ```bash
-# Check if EAS is active
+# EASが有効か確認する
 dmesg | grep -i "energy"
 # sched: EAS: Energy Model successfully initialized
 
-# CPU capacities
+# CPU能力
 cat /sys/devices/system/cpu/cpu*/cpu_capacity
 # 512 512 512 512 1024 1024 1024 1024
-# (LITTLE cores at 512, big cores at 1024)
+# （LITTLEコアは512、bigコアは1024）
 
-# Energy model per-domain
+# ドメインごとのエネルギーモデル
 cat /sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state
 
-# Task placement: which core type is each task using?
+# タスクの配置: 各タスクはどの種類のコアを使っているか？
 ps aux --sort=-%cpu | head -10
-# Then check CPU affinity:
+# 次にCPUアフィニティを確認する:
 taskset -cp <pid>
 
-# perf: energy events
+# perf: エネルギーのイベント
 perf stat -e power/energy-pkg/,power/energy-cores/ sleep 10
 
-# Trace EAS decisions
+# EASの判断をトレースする
 echo 1 > /sys/kernel/tracing/events/sched/sched_find_energy_efficient_cpu/enable
 cat /sys/kernel/tracing/trace_pipe
 
-# Force a task to LITTLE cores only (for testing)
-taskset -cp 0-3 <pid>  # pin to CPUs 0-3 (LITTLE cores)
+# タスクをLITTLEコアのみに強制する（テスト用）
+taskset -cp 0-3 <pid>  # CPU 0-3（LITTLEコア）にピン留めする
 ```
 
-## big.LITTLE Linux support {#biglittle-linux-support}
+## Linuxにおけるbig.LITTLEのサポート {#biglittle-linux-support}
 
 ```bash
-# Check asymmetric CPU topology
+# 非対称なCPUトポロジを確認する
 cat /sys/devices/system/cpu/cpu*/topology/physical_package_id
 cat /sys/devices/system/cpu/cpu*/cpu_capacity
 
-# ARM's sysfs for cluster info
+# クラスタ情報のためのARMのsysfs
 cat /sys/devices/system/cpu/cpufreq/policy*/cpuinfo_max_freq
 
-# Current energy model
+# 現在のエネルギーモデル
 for cpu in /sys/devices/system/cpu/cpu*/; do
     echo -n "$cpu: capacity "
     cat "$cpu/cpu_capacity" 2>/dev/null || echo "N/A"
 done
 ```
 
-## Thermal pressure {#thermal-pressure}
+## 熱圧力 {#thermal-pressure}
 
-When a CPU is thermally throttled, its capacity is temporarily reduced. EAS accounts for this:
+CPUが熱によってスロットリングされると、その能力は一時的に低下する。EASはこれを考慮に入れる:
 
 ```c
 /* drivers/base/arch_topology.c */
@@ -249,26 +249,26 @@ void arch_update_thermal_pressure(const struct cpumask *cpus,
 
     max_freq = per_cpu(freq_factor, cpu) * arch_max_freq_scale;
 
-    /* thermal_pressure = capacity loss due to throttling */
+    /* thermal_pressure = スロットリングによる能力の損失 */
     thermal_pressure = max_freq - capped_frequency;
     thermal_pressure = div_u64(thermal_pressure << SCHED_CAPACITY_SHIFT,
                                 max_freq);
 
-    /* Reduce effective capacity */
+    /* 実効能力を下げる */
     WRITE_ONCE(per_cpu(thermal_pressure, cpu), thermal_pressure);
 }
 ```
 
 ```bash
-# Current thermal pressure per CPU
+# CPUごとの現在の熱圧力
 cat /sys/devices/system/cpu/cpu*/thermal_throttle/throttle_count
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Load Balancing](load-balancing.md) — cross-CPU task migration
-- [cpufreq: P-states](../power/cpufreq.md) — frequency selection, schedutil
-- [Scheduler: EEVDF](eevdf.md) — per-CPU scheduling policy
-- [Scheduler Domains](sched-domains.md) — topology construction for EAS
+- [負荷分散](load-balancing.md) — CPUをまたぐタスクのマイグレーション
+- [cpufreq: P-state](../power/cpufreq.md) — 周波数の選択、schedutil
+- [スケジューラ: EEVDF](eevdf.md) — CPUごとのスケジューリングポリシー
+- [スケジューラドメイン](sched-domains.md) — EASのためのトポロジの構築
 - `kernel/sched/fair.c` — `find_energy_efficient_cpu`
-- `Documentation/scheduler/sched-energy.rst` in the kernel tree
+- カーネルツリー内の`Documentation/scheduler/sched-energy.rst`

@@ -1,10 +1,10 @@
-# KVM Exit Handling {#kvm-exit-handling}
+# KVMのexit処理 {#kvm-exit-handling}
 
-> What happens when a guest faults: exit reasons, I/O emulation, and MMIO
+> ゲストがフォールトしたときに何が起こるか: exit理由、I/Oエミュレーション、MMIO
 
-## The vcpu_run loop {#the-vcpu_run-loop}
+## vcpu_runループ {#the-vcpu_run-loop}
 
-Every KVM vCPU runs in a tight loop inside `kvm_arch_vcpu_ioctl_run()` in `arch/x86/kvm/x86.c`. The loop enters the guest, hardware runs the guest until something requires hypervisor intervention (a VM exit), then KVM dispatches that exit to the appropriate handler.
+KVMのすべてのvCPUは、`arch/x86/kvm/x86.c`の`kvm_arch_vcpu_ioctl_run()`内のタイトなループで動作する。ループはゲストに入り、ハイパーバイザの介入を必要とする何か（VM exit）が起こるまでハードウェアがゲストを実行し、その後KVMがそのexitを適切なハンドラにディスパッチする。
 
 ```
 kvm_arch_vcpu_ioctl_run()          arch/x86/kvm/x86.c
@@ -24,51 +24,51 @@ kvm_arch_vcpu_ioctl_run()          arch/x86/kvm/x86.c
                           returns 0 → exit to userspace VMM
 ```
 
-The key contract: a handler returning `1` means KVM can re-enter the guest immediately. Returning `0` or a negative error means `KVM_RUN` ioctl returns to userspace, which inspects `struct kvm_run` to learn what happened.
+重要な約束事: ハンドラが`1`を返すと、KVMはすぐにゲストに再び入れることを意味する。`0`または負のエラーを返すと、`KVM_RUN` ioctlがユーザー空間に戻ることを意味し、ユーザー空間は`struct kvm_run`を調べて何が起きたかを知る。
 
-### vcpu_enter_guest internals {#vcpu_enter_guest-internals}
+### vcpu_enter_guestの内部 {#vcpu_enter_guest-internals}
 
-Before entering the guest on each iteration, `vcpu_enter_guest()` processes any pending work:
+各反復でゲストに入る前に、`vcpu_enter_guest()`は保留中の作業を処理する。
 
 ```c
-/* arch/x86/kvm/x86.c (simplified) */
+/* arch/x86/kvm/x86.c（簡略化したもの） */
 static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 {
     fastpath_t exit_fastpath;
-    u64 run_flags = 0;   /* KVM_RUN_FORCE_IMMEDIATE_EXIT, KVM_RUN_LOAD_GUEST_DR6,
-                           * KVM_RUN_LOAD_DEBUGCTL — built up from pending-exit,
-                           * debug-register, and debugctl state; omitted here */
+    u64 run_flags = 0;   /* KVM_RUN_FORCE_IMMEDIATE_EXIT、KVM_RUN_LOAD_GUEST_DR6、
+                           * KVM_RUN_LOAD_DEBUGCTL — 保留中のexit、デバッグレジスタ、
+                           * debugctlの状態から組み立てられる。ここでは省略 */
 
-    /* Process pending requests: TLB flushes, MMU reloads, etc. */
+    /* 保留中のリクエストを処理する: TLBフラッシュ、MMUのリロードなど */
     if (kvm_check_request(KVM_REQ_MMU_SYNC, vcpu))
         kvm_mmu_sync_roots(vcpu);
     if (kvm_check_request(KVM_REQ_TLB_FLUSH, vcpu))
         kvm_vcpu_flush_tlb_all(vcpu);
-    /* ... other KVM_REQ_* flags ... */
+    /* ... 他のKVM_REQ_*フラグ ... */
 
-    /* Inject a pending interrupt (if any) before entering */
+    /* 入る前に保留中の割り込みがあれば注入する */
     if (kvm_cpu_has_injectable_intr(vcpu))
         kvm_x86_call(inject_irq)(vcpu, false /* reinjected */);
 
-    /* Disable preemption, switch to guest CR3, enter VMX non-root */
-    exit_fastpath = kvm_x86_call(vcpu_run)(vcpu, run_flags);  /* VMLAUNCH or VMRESUME */
+    /* プリエンプションを無効にし、ゲストのCR3に切り替え、VMX non-rootに入る */
+    exit_fastpath = kvm_x86_call(vcpu_run)(vcpu, run_flags);  /* VMLAUNCHまたはVMRESUME */
 
     /*
-     * We are back — VM exit occurred. handle_exit_irqoff() does minimal
-     * work with interrupts still disabled (e.g. #NM handling); it doesn't
-     * return anything — exit_fastpath came from the vcpu_run() call above.
+     * 戻ってきた — VM exitが発生した。handle_exit_irqoff()は割り込みが
+     * 無効なまま最小限の作業（例: #NMの処理）を行う。何も返さない —
+     * exit_fastpathは上のvcpu_run()呼び出しから得たもの。
      */
     kvm_x86_call(handle_exit_irqoff)(vcpu);
 
-    /* ... re-enable interrupts/preemption, account guest time, etc ... */
+    /* ... 割り込み/プリエンプションを再び有効にし、ゲスト時間を計上するなど ... */
 
     return kvm_x86_call(handle_exit)(vcpu, exit_fastpath);
 }
 ```
 
-## Exit reason dispatch {#exit-reason-dispatch}
+## exit理由のディスパッチ {#exit-reason-dispatch}
 
-On Intel, the exit reason is stored in the VMCS `VM_EXIT_REASON` field. `vmx_get_exit_reason(vcpu)` reads it (from a per-vCPU VMX field, not `vcpu->arch`) into a `union vmx_exit_reason`, and the low bits (`.basic`) index into `kvm_vmx_exit_handlers[]`:
+Intelでは、exit理由はVMCSの`VM_EXIT_REASON`フィールドに格納される。`vmx_get_exit_reason(vcpu)`は（`vcpu->arch`ではなくvCPUごとのVMXのフィールドから）それを`union vmx_exit_reason`に読み込み、下位ビット（`.basic`）が`kvm_vmx_exit_handlers[]`のインデックスとなる。
 
 ```c
 /* arch/x86/kvm/vmx/vmx.c */
@@ -86,7 +86,7 @@ static int (*kvm_vmx_exit_handlers[])(struct kvm_vcpu *vcpu) = {
     [EXIT_REASON_EPT_MISCONFIG]     = handle_ept_misconfig,
     [EXIT_REASON_VMCALL]            = kvm_emulate_hypercall,
     [EXIT_REASON_APIC_ACCESS]       = handle_apic_access,
-    /* ... ~50 total handlers ... */
+    /* ... 合計で約50個のハンドラ ... */
 };
 
 static int __vmx_handle_exit(struct kvm_vcpu *vcpu,
@@ -95,18 +95,18 @@ static int __vmx_handle_exit(struct kvm_vcpu *vcpu,
     struct vcpu_vmx *vmx = to_vmx(vcpu);
     union vmx_exit_reason exit_reason = vmx_get_exit_reason(vcpu);
 
-    /* If guest state can't run natively in VMX non-root mode (the
-     * common case: real-mode/16-bit code, e.g. BIOS, on hardware
-     * without "unrestricted guest" support), fully emulate instead of
-     * dispatching through the table below: */
+    /* ゲストの状態がVMX non-root modeでネイティブに実行できない場合
+     * （よくあるケース: "unrestricted guest"をサポートしないハードウェア上の
+     * リアルモード/16ビットのコード、例えばBIOS）、下のテーブルによる
+     * ディスパッチではなく完全にエミュレートする: */
     if (vmx->vt.emulation_required)
         return handle_invalid_guest_state(vcpu);
 
-    /* ... failed-entry and event-vectoring checks omitted ... */
+    /* ... entry失敗とイベントのベクタリングのチェックは省略 ... */
 
     if (exit_reason.basic >= kvm_vmx_max_exit_handlers ||
         !kvm_vmx_exit_handlers[exit_reason.basic]) {
-        /* Unrecognized exit reason: dump state, exit to userspace */
+        /* 認識できないexit理由: 状態をダンプし、ユーザー空間にexitする */
         dump_vmcs(vcpu);
         kvm_prepare_unexpected_reason_exit(vcpu, exit_reason.full);
         return 0;
@@ -116,22 +116,22 @@ static int __vmx_handle_exit(struct kvm_vcpu *vcpu,
 }
 ```
 
-`__vmx_handle_exit()` does the actual dispatch; the entry point reached via `kvm_x86_call(handle_exit)` is a thin `vmx_handle_exit()` wrapper around it that also checks for a detected bus lock (`KVM_EXIT_X86_BUS_LOCK`).
+実際のディスパッチは`__vmx_handle_exit()`が行う。`kvm_x86_call(handle_exit)`で到達するエントリポイントは、それを包む薄い`vmx_handle_exit()`ラッパーであり、検出されたバスロック（`KVM_EXIT_X86_BUS_LOCK`）のチェックも行う。
 
-AMD SVM follows the same pattern with `svm_exit_handlers[]` in `arch/x86/kvm/svm/svm.c`, indexed by the `EXITCODE` field in the VMCB.
+AMD SVMも同じパターンに従い、`arch/x86/kvm/svm/svm.c`の`svm_exit_handlers[]`を、VMCBの`EXITCODE`フィールドでインデックスする。
 
-## Common exit reasons {#common-exit-reasons}
+## 代表的なexit理由 {#common-exit-reasons}
 
-### EXIT_REASON_IO_INSTRUCTION — port I/O {#exit_reason_io_instruction-port-io}
+### EXIT_REASON_IO_INSTRUCTION — ポートI/O {#exit_reason_io_instruction-port-io}
 
-Port I/O instructions (`in`/`out`) exit by default; the per-VMCS I/O bitmap can be configured to let specific ports run without exiting at all. Of the ports that do exit, the fast path handles simple cases in-kernel; the slow path (string I/O) falls back to full instruction emulation.
+ポートI/O命令（`in`/`out`）はデフォルトでexitする。VMCSごとのI/Oビットマップを設定すれば、特定のポートについてはまったくexitせずに実行させることができる。exitするポートのうち、単純なケースは高速パスがカーネル内で処理し、低速パス（ストリングI/O）は完全な命令エミュレーションにフォールバックする。
 
 ```c
 /* arch/x86/kvm/vmx/vmx.c */
 static int handle_io(struct kvm_vcpu *vcpu)
 {
     unsigned long exit_qualification = vmx_get_exit_qual(vcpu);
-    int size   = (exit_qualification & 7) + 1; /* 1, 2, or 4 bytes */
+    int size   = (exit_qualification & 7) + 1; /* 1、2、または4バイト */
     int in     = (exit_qualification >> 3) & 1;
     int string = (exit_qualification >> 4) & 1;
     int port   = exit_qualification >> 16;
@@ -143,38 +143,38 @@ static int handle_io(struct kvm_vcpu *vcpu)
 }
 ```
 
-`kvm_fast_pio()` (in `arch/x86/kvm/x86.c`) hands off to `kvm_fast_pio_in()`/`kvm_fast_pio_out()`, which go through the emulator's `emulator_pio_in()`/`emulator_pio_out()` path. That path tries in-kernel device emulation via the `kvm_io_bus` dispatch table first; if no in-kernel device owns the port, it fills `kvm_run` and returns `0`:
+`kvm_fast_pio()`（`arch/x86/kvm/x86.c`内）は`kvm_fast_pio_in()`/`kvm_fast_pio_out()`に処理を渡し、これらはエミュレータの`emulator_pio_in()`/`emulator_pio_out()`の経路を通る。この経路はまず`kvm_io_bus`のディスパッチテーブルを介してカーネル内のデバイスエミュレーションを試み、そのポートを所有するカーネル内デバイスがなければ`kvm_run`を埋めて`0`を返す。
 
 ```c
-/* struct kvm_run — userspace sees this on KVM_EXIT_IO */
+/* struct kvm_run — KVM_EXIT_IOのときにユーザー空間が見るもの */
 struct kvm_run {
     __u32 exit_reason;    /* KVM_EXIT_IO */
     /* ... */
     struct {
-        __u8  direction;  /* KVM_EXIT_IO_IN or KVM_EXIT_IO_OUT */
-        __u8  size;       /* 1, 2, or 4 */
-        __u16 port;       /* I/O port number */
-        __u32 count;      /* for string I/O: repeat count */
-        __u64 data_offset;/* offset into kvm_run where data lives */
+        __u8  direction;  /* KVM_EXIT_IO_INまたはKVM_EXIT_IO_OUT */
+        __u8  size;       /* 1、2、または4 */
+        __u16 port;       /* I/Oポート番号 */
+        __u32 count;      /* ストリングI/Oの場合: 繰り返し回数 */
+        __u64 data_offset;/* データが置かれているkvm_run内のオフセット */
     } io;
 };
 ```
 
-### EXIT_REASON_EPT_VIOLATION — EPT/NPT page fault {#exit_reason_ept_violation-eptnpt-page-fault}
+### EXIT_REASON_EPT_VIOLATION — EPT/NPTのページフォールト {#exit_reason_ept_violation-eptnpt-page-fault}
 
-When the guest accesses a guest physical address (GPA) that has no valid Extended Page Table (EPT) entry, or violates access permissions, hardware raises an EPT violation exit.
+ゲストが、有効なExtended Page Table（EPT）エントリを持たないゲスト物理アドレス（GPA）にアクセスするか、アクセス権に違反すると、ハードウェアはEPT violationのexitを発生させる。
 
 ```c
-/* arch/x86/kvm/vmx/vmx.c — handle_ept_violation() with its
- * __vmx_handle_ept_violation() helper folded in, simplified */
+/* arch/x86/kvm/vmx/vmx.c — handle_ept_violation()に、その
+ * __vmx_handle_ept_violation()ヘルパーを畳み込んで簡略化したもの */
 static int handle_ept_violation(struct kvm_vcpu *vcpu)
 {
     unsigned long exit_qualification = vmx_get_exit_qual(vcpu);
     gpa_t gpa = vmcs_read64(GUEST_PHYSICAL_ADDRESS);
     u64 error_code = 0;
 
-    /* Was this a read, write, or instruction fetch? */
-    /* No PFERR bit for read (absence of WRITE and FETCH implies read) */
+    /* 読み込み、書き込み、命令フェッチのどれだったか */
+    /* 読み込み用のPFERRビットはない（WRITEとFETCHがなければ読み込みを意味する） */
     if (exit_qualification & EPT_VIOLATION_ACC_WRITE)
         error_code |= PFERR_WRITE_MASK;
     if (exit_qualification & EPT_VIOLATION_ACC_INSTR)
@@ -184,25 +184,25 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 }
 ```
 
-`kvm_mmu_page_fault()` (in `arch/x86/kvm/mmu/mmu.c`) determines the cause:
+`kvm_mmu_page_fault()`（`arch/x86/kvm/mmu/mmu.c`内）は原因を判定する。
 
-- **Missing mapping**: installs a new EPT leaf entry pointing to the host physical page.
-- **MMIO range**: the GPA maps to a device, not RAM — triggers MMIO emulation (see below).
-- **Permission fault**: guest tried a disallowed access (e.g., write to read-only page for CoW).
+- **マッピングの欠如**: ホストの物理ページを指す新しいEPTリーフエントリをインストールする。
+- **MMIO範囲**: GPAがRAMではなくデバイスにマップされている — MMIOエミュレーションを発生させる（下記参照）。
+- **権限フォールト**: ゲストが許可されていないアクセスを試みた（例: CoWのための読み取り専用ページへの書き込み）。
 
 ### EXIT_REASON_CPUID {#exit_reason_cpuid}
 
-`CPUID` is always intercepted so KVM can filter or synthesize feature bits. The handler calls `kvm_emulate_cpuid()` in `arch/x86/kvm/cpuid.c`, which looks up the leaf in `vcpu->arch.cpuid_entries[]` (populated from `KVM_SET_CPUID2` ioctl). Sensitive leaves are masked — for example, the hypervisor bit is set, and certain VMX feature bits are hidden from the guest.
+`CPUID`は常にインターセプトされ、KVMが機能ビットをフィルタリングまたは合成できるようになっている。ハンドラは`arch/x86/kvm/cpuid.c`の`kvm_emulate_cpuid()`を呼び、これは`vcpu->arch.cpuid_entries[]`（`KVM_SET_CPUID2` ioctlから設定される）でリーフを検索する。機微なリーフはマスクされる。たとえば、hypervisorビットがセットされ、特定のVMX機能ビットはゲストから隠される。
 
 ### EXIT_REASON_HLT {#exit_reason_hlt}
 
-When the guest executes `HLT` and interrupts are disabled, there is nothing for the vCPU to do. KVM calls `kvm_vcpu_halt()` which calls `kvm_vcpu_block()`:
+ゲストが`HLT`を実行し、割り込みが無効になっている場合、vCPUがすることは何もない。KVMは`kvm_vcpu_halt()`を呼び、これが`kvm_vcpu_block()`を呼ぶ。
 
 ```c
-/* virt/kvm/kvm_main.c, simplified */
+/* virt/kvm/kvm_main.c、簡略化したもの */
 bool kvm_vcpu_block(struct kvm_vcpu *vcpu)
 {
-    struct rcuwait *wait = kvm_arch_vcpu_get_wait(vcpu);  /* &vcpu->wait, generically */
+    struct rcuwait *wait = kvm_arch_vcpu_get_wait(vcpu);  /* 汎用的には&vcpu->wait */
     bool waited = false;
 
     kvm_arch_vcpu_blocking(vcpu);
@@ -211,34 +211,34 @@ bool kvm_vcpu_block(struct kvm_vcpu *vcpu)
     for (;;) {
         set_current_state(TASK_INTERRUPTIBLE);
         if (kvm_vcpu_check_block(vcpu) < 0)
-            break;          /* runnable again, or has other pending work */
+            break;          /* 再び実行可能になった、または他の保留中の作業がある */
         waited = true;
         schedule();
     }
 
     finish_rcuwait(wait);
     kvm_arch_vcpu_unblocking(vcpu);
-    return waited;          /* did we actually sleep, or was there work already? */
+    return waited;          /* 実際にスリープしたか、それとも既に作業があったか */
 }
 ```
 
-The vCPU thread sleeps until `kvm_vcpu_kick()` wakes it — typically because a virtual interrupt arrived.
+vCPUスレッドは、`kvm_vcpu_kick()`が起こすまでスリープする。これは典型的には仮想割り込みが到着したためである。
 
 ### EXIT_REASON_MSR_READ / MSR_WRITE {#exit_reason_msr_read-msr_write}
 
-MSR accesses can be made cheap with the **MSR bitmap**: a 4KB page (pointed to by the VMCS's `MSR_BITMAP` field, not embedded in the VMCS itself) where each bit controls whether a specific MSR causes a VM exit. Frequently-read MSRs like `IA32_TSC` or `IA32_SYSENTER_EIP` can be pass-through (no exit). For intercepted MSRs, KVM dispatches to `kvm_emulate_rdmsr()` or `kvm_emulate_wrmsr()` (in `arch/x86/kvm/x86.c`), which uses switch-based per-MSR dispatch inside `__kvm_get_msr()` / `__kvm_set_msr()`.
+MSRへのアクセスは、**MSRビットマップ**によって安価にできる。これは4KBのページ（VMCS自体に埋め込まれているのではなく、VMCSの`MSR_BITMAP`フィールドが指す）で、各ビットが特定のMSRがVM exitを引き起こすかどうかを制御する。`IA32_TSC`や`IA32_SYSENTER_EIP`のような頻繁に読まれるMSRはパススルー（exitなし）にできる。インターセプトされるMSRについては、KVMは`kvm_emulate_rdmsr()`または`kvm_emulate_wrmsr()`（`arch/x86/kvm/x86.c`内）にディスパッチし、これらは`__kvm_get_msr()` / `__kvm_set_msr()`の中でswitchによるMSRごとのディスパッチを行う。
 
 ### EXIT_REASON_EXCEPTION_NMI {#exit_reason_exception_nmi}
 
-Guest exceptions (page faults, GPFs, breakpoints) and NMIs exit here. `handle_exception_nmi()` in `arch/x86/kvm/vmx/vmx.c` inspects the `VM_EXIT_INTR_INFO` VMCS field to determine the vector. Depending on context:
+ゲストの例外（ページフォールト、一般保護例外、ブレークポイント）とNMIはここでexitする。`arch/x86/kvm/vmx/vmx.c`の`handle_exception_nmi()`は、VMCSの`VM_EXIT_INTR_INFO`フィールドを調べてベクタを判定する。状況に応じて次のようになる。
 
-- **Guest page fault** (`#PF`): handled by `kvm_handle_page_fault()` — either maps a host page or re-injects the fault to the guest.
-- **Breakpoint** (`#BP`): delivered to the guest or intercepted for GDB stub.
-- **NMI**: injected into the guest via the VMCS event-injection mechanism.
+- **ゲストのページフォールト**（`#PF`）: `kvm_handle_page_fault()`が処理する — ホストのページをマップするか、フォールトをゲストに再注入する。
+- **ブレークポイント**（`#BP`）: ゲストに配送されるか、GDBスタブのためにインターセプトされる。
+- **NMI**: VMCSのイベント注入の仕組みによってゲストに注入される。
 
-## MMIO emulation {#mmio-emulation}
+## MMIOエミュレーション {#mmio-emulation}
 
-When `handle_ept_violation()` determines the faulting GPA is in a MMIO region (no host physical mapping exists), KVM emulates the instruction that caused the fault rather than mapping a page.
+`handle_ept_violation()`が、フォールトしたGPAがMMIO領域にある（ホストの物理マッピングが存在しない）と判定すると、KVMはページをマップする代わりに、フォールトを引き起こした命令をエミュレートする。
 
 ```
 Guest executes:   mov [0xfee00000], eax   (write to local APIC MMIO)
@@ -260,68 +260,68 @@ Guest executes:   mov [0xfee00000], eax   (write to local APIC MMIO)
            └── miss: kvm_run.mmio filled; ioctl returns to userspace
 ```
 
-The MMIO fields in `struct kvm_run` (from `include/uapi/linux/kvm.h`):
+`struct kvm_run`のMMIOフィールド（`include/uapi/linux/kvm.h`より）:
 
 ```c
-/* When exit_reason == KVM_EXIT_MMIO */
+/* exit_reason == KVM_EXIT_MMIOのとき */
 struct kvm_run {
     __u32 exit_reason;   /* KVM_EXIT_MMIO */
     /* ... */
     struct {
-        __u64 phys_addr; /* guest physical address of the MMIO access */
-        __u8  data[8];   /* data to write (for writes); filled by userspace (for reads) */
-        __u32 len;       /* access size: 1, 2, 4, or 8 bytes */
-        __u8  is_write;  /* 1 = guest write, 0 = guest read */
+        __u64 phys_addr; /* MMIOアクセスのゲスト物理アドレス */
+        __u8  data[8];   /* 書き込むデータ（書き込みの場合）。読み込みの場合はユーザー空間が埋める */
+        __u32 len;       /* アクセスサイズ: 1、2、4、または8バイト */
+        __u8  is_write;  /* 1 = ゲストの書き込み、0 = ゲストの読み込み */
     } mmio;
 };
 ```
 
-For a guest **read**: userspace (e.g. QEMU) fills `kvm_run.mmio.data` with the device register value, then re-enters KVM via `KVM_RUN`. KVM completes the emulated instruction by writing the data into the guest register.
+ゲストの**読み込み**の場合: ユーザー空間（例: QEMU）は`kvm_run.mmio.data`にデバイスレジスタの値を埋め、`KVM_RUN`でKVMに再び入る。KVMはそのデータをゲストのレジスタに書き込んで、エミュレートした命令を完了させる。
 
-For a guest **write**: userspace reads `kvm_run.mmio.data` and forwards it to its device model.
+ゲストの**書き込み**の場合: ユーザー空間は`kvm_run.mmio.data`を読み、それを自身のデバイスモデルに転送する。
 
-### KVM in-kernel devices {#kvm-in-kernel-devices}
+### KVMのカーネル内デバイス {#kvm-in-kernel-devices}
 
-Several devices are emulated entirely in-kernel to avoid the round-trip to userspace:
+いくつかのデバイスは、ユーザー空間への往復を避けるために完全にカーネル内でエミュレートされる。
 
-| Device | In-kernel emulation | Registration |
+| デバイス | カーネル内エミュレーション | 登録 |
 |--------|---------------------|---------------|
-| Local APIC | `arch/x86/kvm/lapic.c` | Checked directly (`vcpu->arch.apic->dev`) ahead of the generic bus — not registered via `kvm_io_bus_register_dev()` |
-| IOAPIC | `arch/x86/kvm/ioapic.c` | `kvm_io_bus_register_dev(kvm, KVM_MMIO_BUS, ...)`, matched by GPA range |
-| PIT (8254 timer) | `arch/x86/kvm/i8254.c` | `kvm_io_bus_register_dev(kvm, KVM_PIO_BUS, ...)` — legacy port I/O (ports 0x40-0x43, 0x61), not MMIO |
+| ローカルAPIC | `arch/x86/kvm/lapic.c` | 汎用バスより先に直接チェックされる（`vcpu->arch.apic->dev`） — `kvm_io_bus_register_dev()`では登録されない |
+| IOAPIC | `arch/x86/kvm/ioapic.c` | `kvm_io_bus_register_dev(kvm, KVM_MMIO_BUS, ...)`、GPA範囲で照合される |
+| PIT（8254タイマー） | `arch/x86/kvm/i8254.c` | `kvm_io_bus_register_dev(kvm, KVM_PIO_BUS, ...)` — MMIOではなく、レガシーなポートI/O（ポート0x40-0x43、0x61） |
 
-Only IOAPIC (and other genuine MMIO devices) go through the generic `kvm_io_bus` GPA-range lookup; the Local APIC is special-cased ahead of it, and the PIT is reached via the separate port-I/O bus, not MMIO at all.
+汎用の`kvm_io_bus`のGPA範囲による検索を通るのはIOAPIC（およびその他の本物のMMIOデバイス）だけである。ローカルAPICはその前に特別扱いされ、PITはMMIOではまったくなく、別のポートI/Oバスを介して到達する。
 
-## Interrupt injection {#interrupt-injection}
+## 割り込みの注入 {#interrupt-injection}
 
-Interrupts to guest vCPUs do not arrive via normal hardware interrupt lines. KVM manages virtual interrupt delivery:
+ゲストのvCPUへの割り込みは、通常のハードウェア割り込み線を通じて届くわけではない。KVMは仮想割り込みの配送を管理する。
 
 ```c
-/* virt/kvm/kvm_main.c — __kvm_vcpu_kick(), simplified.
- * kvm_vcpu_kick(vcpu) is a thin inline wrapper: __kvm_vcpu_kick(vcpu, false). */
+/* virt/kvm/kvm_main.c — __kvm_vcpu_kick()、簡略化したもの。
+ * kvm_vcpu_kick(vcpu)は薄いインラインラッパー: __kvm_vcpu_kick(vcpu, false)。 */
 void __kvm_vcpu_kick(struct kvm_vcpu *vcpu, bool wait)
 {
     int me, cpu;
 
-    /* Wake it first: if it was blocking (e.g. in HLT), waking it is enough —
-     * no IPI needed since it wasn't running on a pCPU. */
+    /* まず起こす: ブロックしていた（例: HLT中の）場合は、起こすだけで十分 —
+     * pCPU上で実行中ではなかったのでIPIは不要。 */
     if (kvm_vcpu_wake_up(vcpu))
         return;
 
     me = get_cpu();
 
-    /* Kicking your own vCPU from its own thread (e.g. a self-IPI-style
-     * event): just flip the mode flag it polls, no actual IPI needed. */
+    /* 自分自身のスレッドから自分のvCPUをキックする場合（例: 自己IPIのような
+     * イベント）: ポーリングしているモードフラグを切り替えるだけで、実際のIPIは不要。 */
     if (vcpu == __this_cpu_read(kvm_running_vcpu)) {
         if (vcpu->mode == IN_GUEST_MODE)
             WRITE_ONCE(vcpu->mode, EXITING_GUEST_MODE);
         goto out;
     }
 
-    /* Otherwise it's running on some other pCPU: send an IPI to force a
-     * VM exit so it notices pending work. */
+    /* そうでなければ他のpCPU上で実行中: IPIを送ってVM exitを強制し、
+     * 保留中の作業に気付かせる。 */
     if (kvm_arch_vcpu_should_kick(vcpu)) {
-        cpu = READ_ONCE(vcpu->cpu);   /* -1 if not currently loaded */
+        cpu = READ_ONCE(vcpu->cpu);   /* 現在ロードされていなければ-1 */
         if (cpu != me && (unsigned int)cpu < nr_cpu_ids && cpu_online(cpu))
             smp_send_reschedule(cpu);
     }
@@ -330,7 +330,7 @@ out:
 }
 ```
 
-The interrupt routing path for device interrupts:
+デバイス割り込みのルーティング経路:
 
 ```
 Device (e.g., virtio-net) signals IRQ
@@ -341,24 +341,24 @@ Device (e.g., virtio-net) signals IRQ
   → on next vcpu_enter_guest(): inject via VMCS VM-entry interrupt info field
 ```
 
-The routing table (`struct kvm_irq_routing_table`, allocated in `virt/kvm/irqchip.c`) maps GSI numbers to IOAPIC/MSI entries and is updated via the `KVM_SET_GSI_ROUTING` ioctl.
+ルーティングテーブル（`struct kvm_irq_routing_table`、`virt/kvm/irqchip.c`で割り当てられる）はGSI番号をIOAPIC/MSIのエントリにマップし、`KVM_SET_GSI_ROUTING` ioctlで更新される。
 
-Advanced interrupt features that reduce exits:
+exitを減らす高度な割り込み機能:
 
-- **APICv / AVIC**: virtualizes the local APIC in hardware (Intel APICv / AMD AVIC), eliminating most APIC MMIO exits and enabling posted interrupt delivery without a VM exit.
-- **Posted interrupts**: the CPU delivers virtual interrupts directly to the guest without a VM exit, tracked via a per-vCPU posted-interrupt descriptor (`struct pi_desc`).
+- **APICv / AVIC**: ローカルAPICをハードウェアで仮想化し（Intel APICv / AMD AVIC）、APICのMMIOによるexitのほとんどをなくし、VM exitなしでのposted interruptの配送を可能にする。
+- **Posted interrupt**: CPUはVM exitなしで仮想割り込みをゲストに直接配送する。これはvCPUごとのposted interruptディスクリプタ（`struct pi_desc`）で追跡される。
 
-## Performance: measuring exits {#performance-measuring-exits}
+## 性能: exitの測定 {#performance-measuring-exits}
 
-VM exits are the primary source of KVM overhead. Minimizing exit frequency and exit handling latency is the main performance lever.
+VM exitは、KVMのオーバーヘッドの主な発生源である。exitの頻度とexit処理のレイテンシを最小化することが、性能上の主な手段となる。
 
 ```bash
-# Per-VM directories in debugfs, one per VM: <creator-pid>-<vm-fd-name>
+# debugfs内のVMごとのディレクトリ。VMごとに1つ: <creator-pid>-<vm-fd-name>
 ls /sys/kernel/debug/kvm/
-# 1234-3/   ...   (VM-level stat files live directly here)
+# 1234-3/   ...   (VMレベルの統計ファイルはここに直接置かれる)
 
-# Each vCPU gets its own subdirectory, with one raw-counter file per stat
-# (see kvm_vcpu_stats_desc[] in arch/x86/kvm/x86.c) — no single aggregate file:
+# vCPUごとにサブディレクトリがあり、統計ごとに生カウンタのファイルが1つある
+# （arch/x86/kvm/x86.cのkvm_vcpu_stats_desc[]を参照）— 単一の集約ファイルはない:
 ls /sys/kernel/debug/kvm/1234-3/vcpu0/
 # exits  io_exits  mmio_exits  irq_window_exits  halt_exits  halt_wakeup  ...
 
@@ -367,7 +367,7 @@ cat /sys/kernel/debug/kvm/1234-3/vcpu0/exits
 cat /sys/kernel/debug/kvm/1234-3/vcpu0/mmio_exits
 # 340291
 
-# perf KVM: aggregate exit statistics across all VMs
+# perf KVM: すべてのVMにわたるexit統計を集計する
 perf kvm stat record -a sleep 10
 perf kvm stat report
 # Analyze VM exits:
@@ -375,49 +375,49 @@ perf kvm stat report
 # HLT          ...
 # EPT_VIOLATION ...
 
-# kvm_exit tracepoint: per-exit-reason trace
+# kvm_exit tracepoint: exit理由ごとのトレース
 echo 1 > /sys/kernel/tracing/events/kvm/kvm_exit/enable
 cat /sys/kernel/tracing/trace_pipe
 # qemu-1234 [002] kvm_exit: reason EPT_VIOLATION rip 0xffffffff81234567 ...
 
-# kvm_mmio tracepoint: MMIO emulation events
+# kvm_mmio tracepoint: MMIOエミュレーションのイベント
 echo 1 > /sys/kernel/tracing/events/kvm/kvm_mmio/enable
 
-# kvm_pio tracepoint: port I/O events
+# kvm_pio tracepoint: ポートI/Oのイベント
 echo 1 > /sys/kernel/tracing/events/kvm/kvm_pio/enable
 ```
 
-Key performance guidelines:
+性能に関する主な指針:
 
-- **MMIO exits**: use in-kernel emulation (APIC, IOAPIC) or virtio (which batches kicks) to reduce frequency.
-- **MSR exits**: tune the MSR bitmap to pass-through frequently-read MSRs.
-- **PIO exits**: COM1 serial at boot is a common source; disable serial console in production VMs.
-- **EPT violations at startup**: normal — the working set pages in over the first few seconds.
+- **MMIOのexit**: カーネル内エミュレーション（APIC、IOAPIC）やvirtio（キックをバッチ化する）を使って頻度を減らす。
+- **MSRのexit**: MSRビットマップを調整し、頻繁に読まれるMSRをパススルーにする。
+- **PIOのexit**: ブート時のCOM1シリアルがよくある発生源である。本番のVMではシリアルコンソールを無効にする。
+- **起動時のEPT violation**: 正常である — ワーキングセットのページが最初の数秒間で読み込まれる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [arch/x86/kvm/x86.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/x86.c) — `vcpu_enter_guest()`: the per-exit dispatch loop; `kvm_fast_pio()`: the in-kernel port I/O fast path; `kvm_emulate_rdmsr()`/`kvm_emulate_wrmsr()`: MSR read/write VM-exit dispatch
-- [arch/x86/kvm/vmx/vmx.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/vmx/vmx.c) — `kvm_vmx_exit_handlers[]`: the VMX exit-reason dispatch table; `handle_io()`, `handle_ept_violation()`, `handle_exception_nmi()`
-- [arch/x86/kvm/svm/svm.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/svm/svm.c) — `svm_exit_handlers[]`: AMD SVM's equivalent exit-reason table, indexed by the VMCB `EXITCODE` field
-- [arch/x86/kvm/mmu/mmu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/mmu/mmu.c) — `kvm_mmu_page_fault()`: distinguishes a missing EPT mapping, an MMIO region, and a permission fault
-- [arch/x86/kvm/cpuid.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/cpuid.c) — `kvm_emulate_cpuid()`: CPUID leaf lookup and feature-bit filtering
-- [arch/x86/kvm/emulate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/emulate.c) — `x86_emulate_insn()`: the low-level decode-and-execute step invoked internally by `x86_emulate_instruction()` (in `x86.c`), the top-level entry point for MMIO and string I/O emulation; `vcpu_mmio_write()`/`vcpu_mmio_read()` (in `x86.c`) are the emulator callbacks that dispatch to the local APIC directly or fall back to `kvm_io_bus_write()`/`kvm_io_bus_read()`
-- [virt/kvm/kvm_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/kvm_main.c) — `kvm_vcpu_block()`/`kvm_vcpu_kick()`: HLT-driven vCPU sleep and wake
-- [virt/kvm/irqchip.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/irqchip.c) — `kvm_set_irq()` and the GSI routing table used to deliver device interrupts
-- [arch/x86/kvm/lapic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/lapic.c) — in-kernel local APIC emulation
-- [arch/x86/kvm/ioapic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/ioapic.c) — in-kernel IOAPIC emulation
-- [arch/x86/kvm/i8254.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/i8254.c) — in-kernel PIT (8254 timer) emulation
-- [include/uapi/linux/kvm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/kvm.h) — `struct kvm_run`, `KVM_EXIT_IO`, `KVM_EXIT_MMIO`: the userspace-visible exit ABI
+- [arch/x86/kvm/x86.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/x86.c) — `vcpu_enter_guest()`: exitごとのディスパッチループ。`kvm_fast_pio()`: カーネル内のポートI/Oの高速パス。`kvm_emulate_rdmsr()`/`kvm_emulate_wrmsr()`: MSRの読み書きによるVM exitのディスパッチ
+- [arch/x86/kvm/vmx/vmx.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/vmx/vmx.c) — `kvm_vmx_exit_handlers[]`: VMXのexit理由のディスパッチテーブル。`handle_io()`、`handle_ept_violation()`、`handle_exception_nmi()`
+- [arch/x86/kvm/svm/svm.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/svm/svm.c) — `svm_exit_handlers[]`: AMD SVMにおける同等のexit理由テーブル。VMCBの`EXITCODE`フィールドでインデックスされる
+- [arch/x86/kvm/mmu/mmu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/mmu/mmu.c) — `kvm_mmu_page_fault()`: EPTマッピングの欠如、MMIO領域、権限フォールトを区別する
+- [arch/x86/kvm/cpuid.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/cpuid.c) — `kvm_emulate_cpuid()`: CPUIDリーフの検索と機能ビットのフィルタリング
+- [arch/x86/kvm/emulate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/emulate.c) — `x86_emulate_insn()`: MMIOとストリングI/Oのエミュレーションの最上位のエントリポイントである`x86_emulate_instruction()`（`x86.c`内）が内部で呼び出す、低レベルのデコードと実行のステップ。`vcpu_mmio_write()`/`vcpu_mmio_read()`（`x86.c`内）は、ローカルAPICに直接ディスパッチするか`kvm_io_bus_write()`/`kvm_io_bus_read()`にフォールバックするエミュレータのコールバックである
+- [virt/kvm/kvm_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/kvm_main.c) — `kvm_vcpu_block()`/`kvm_vcpu_kick()`: HLTによるvCPUのスリープと起床
+- [virt/kvm/irqchip.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/irqchip.c) — `kvm_set_irq()`と、デバイス割り込みの配送に使われるGSIのルーティングテーブル
+- [arch/x86/kvm/lapic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/lapic.c) — カーネル内のローカルAPICのエミュレーション
+- [arch/x86/kvm/ioapic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/ioapic.c) — カーネル内のIOAPICのエミュレーション
+- [arch/x86/kvm/i8254.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/i8254.c) — カーネル内のPIT（8254タイマー）のエミュレーション
+- [include/uapi/linux/kvm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/kvm.h) — `struct kvm_run`、`KVM_EXIT_IO`、`KVM_EXIT_MMIO`: ユーザー空間から見えるexitのABI
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [KVM Architecture](kvm-arch.md) — vCPU lifecycle, VMCS, KVM ioctls
-- [Memory Virtualization](kvm-memory.md) — EPT, shadow paging, MMU notifiers
-- [Nested Virtualization](nested-virt.md) — exit handling for L2 guests
+- [KVMアーキテクチャ](kvm-arch.md) — vCPUのライフサイクル、VMCS、KVMのioctl
+- [メモリ仮想化](kvm-memory.md) — EPT、シャドウページング、MMU notifier
+- [ネストされた仮想化](nested-virt.md) — L2ゲストのexit処理
 
-### External {#external}
+### 外部資料 {#external}
 
-- [The Definitive KVM API Documentation](https://docs.kernel.org/virt/kvm/api.html) — `KVM_RUN`, `struct kvm_run`, and the `KVM_EXIT_IO`/`KVM_EXIT_MMIO` field layouts
-- [KVM VCPU Requests](https://docs.kernel.org/virt/kvm/vcpu-requests.html) — the `KVM_REQ_*` flag mechanism processed at the top of `vcpu_enter_guest()`
+- [The Definitive KVM API Documentation](https://docs.kernel.org/virt/kvm/api.html) — `KVM_RUN`、`struct kvm_run`、`KVM_EXIT_IO`/`KVM_EXIT_MMIO`のフィールドレイアウト
+- [KVM VCPU Requests](https://docs.kernel.org/virt/kvm/vcpu-requests.html) — `vcpu_enter_guest()`の冒頭で処理される`KVM_REQ_*`フラグの仕組み
