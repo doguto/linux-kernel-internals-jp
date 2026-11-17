@@ -1,23 +1,23 @@
 # KCSAN: Kernel Concurrency Sanitizer {#kcsan-kernel-concurrency-sanitizer}
 
-> Data race detection using watchpoints and the Linux Kernel Memory Model
+> ウォッチポイントとLinux Kernel Memory Modelを用いたデータ競合検出
 
-## What is a data race? {#what-is-a-data-race}
+## データ競合とは {#what-is-a-data-race}
 
-A **data race** occurs when two threads access the same memory location concurrently, at least one access is a write, and there's no synchronization between them:
+**データ競合（data race）**は、2つのスレッドが同じメモリ位置に並行してアクセスし、少なくとも一方が書き込みであり、両者の間に同期がない場合に発生する:
 
 ```c
-/* Thread 1: */         /* Thread 2: */
-x++;                    y = x;     /* data race! */
-/* Reads x, increments, writes x — 3 non-atomic operations */
-/* Thread 2 may see a partial state */
+/* スレッド1: */         /* スレッド2: */
+x++;                    y = x;     /* データ競合! */
+/* xを読み、インクリメントし、xに書く — 3つの非アトミック操作 */
+/* スレッド2は中途半端な状態を見る可能性がある */
 ```
 
-Data races are undefined behavior in C11 and cause subtle bugs — compilers can miscompile racing code in unexpected ways, and hardware CPUs may reorder or coalesce the accesses.
+データ競合はC11では未定義動作であり、微妙なバグの原因になる。コンパイラは競合するコードを予期しない形で誤ってコンパイルしうるし、ハードウェアのCPUはアクセスを並べ替えたり結合したりすることがある。
 
-## How KCSAN works {#how-kcsan-works}
+## KCSANの仕組み {#how-kcsan-works}
 
-KCSAN uses **software watchpoints** to detect racing accesses:
+KCSANは**ソフトウェアウォッチポイント**を使って競合するアクセスを検出する:
 
 ```
 Thread 1 write to &x:
@@ -30,24 +30,24 @@ Thread 2 read from &x (during the delay):
   5. KCSAN reports the data race
 ```
 
-This is a probabilistic approach — not all races are detected, but it finds real races in practice without false positives (compared to shadow memory approaches).
+これは確率的なアプローチであり、すべての競合が検出されるわけではないが、（シャドウメモリ方式と比べて）誤検知なしに実際の競合を現実的に見つけられる。
 
-## Configuration {#configuration}
+## 設定 {#configuration}
 
 ```bash
-# Kconfig options (all but one are the real defaults once CONFIG_KCSAN=y):
+# Kconfigオプション（CONFIG_KCSAN=yにしたときの実際のデフォルト値。1つを除く）:
 CONFIG_KCSAN=y
-CONFIG_KCSAN_REPORT_ONCE_IN_MS=3000     # rate-limit reports (default)
-CONFIG_KCSAN_DELAY_RANDOMIZE=y          # randomize watchpoint delay (default)
-CONFIG_KCSAN_NUM_WATCHPOINTS=64         # software watchpoint slots, shared across CPUs (default)
-CONFIG_KCSAN_INTERRUPT_WATCHER=y        # also watch interrupt context -- NOT the default (defaults
-                                         # to n unless KCSAN_STRICT=y); shown here as an opt-in example
-CONFIG_KCSAN_REPORT_RACE_UNKNOWN_ORIGIN=y  # report even without second stack (default)
+CONFIG_KCSAN_REPORT_ONCE_IN_MS=3000     # レポートのレート制限（デフォルト）
+CONFIG_KCSAN_DELAY_RANDOMIZE=y          # ウォッチポイントの遅延をランダム化（デフォルト）
+CONFIG_KCSAN_NUM_WATCHPOINTS=64         # ソフトウェアウォッチポイントのスロット数。全CPUで共有（デフォルト）
+CONFIG_KCSAN_INTERRUPT_WATCHER=y        # 割り込みコンテキストも監視 -- デフォルトではない（KCSAN_STRICT=y
+                                         # でない限りnがデフォルト）。ここではオプトインの例として示す
+CONFIG_KCSAN_REPORT_RACE_UNKNOWN_ORIGIN=y  # 2つ目のスタックがなくても報告する（デフォルト）
 
-# Build: set CONFIG_KCSAN=y in .config, then build normally
+# ビルド: .configでCONFIG_KCSAN=yを設定し、通常どおりビルドする
 ```
 
-## Reading KCSAN reports {#reading-kcsan-reports}
+## KCSANレポートの読み方 {#reading-kcsan-reports}
 
 ```
 ==================================================================
@@ -70,75 +70,75 @@ CPU: 1 PID: 5678 Comm: worker Tainted: G    B W
 ==================================================================
 ```
 
-Key fields:
+主なフィールド:
 
-- **read/write**: which operation triggered the watchpoint
-- **address**: the racing memory location
-- **value changed**: shows the write that caused the race
-- **two call stacks**: one for each racing access
+- **read/write**: ウォッチポイントを発火させた操作
+- **address**: 競合しているメモリ位置
+- **value changed**: 競合を引き起こした書き込みを示す
+- **2つのコールスタック**: 競合する各アクセスにつき1つ
 
-## Annotation: intentional benign races {#annotation-intentional-benign-races}
+## アノテーション: 意図的で無害な競合 {#annotation-intentional-benign-races}
 
-Some kernel code intentionally reads a variable without synchronization as a hint/optimization. These must be annotated to silence KCSAN:
+カーネルコードの一部は、ヒントや最適化として、同期なしで意図的に変数を読む。KCSANを黙らせるには、これらにアノテーションを付けなければならない:
 
 ```c
-/* READ_ONCE / WRITE_ONCE: communicate to compiler AND KCSAN */
-/* that this access is intentionally unsynchronized */
-int val = READ_ONCE(shared_var);   /* don't optimize away the read */
-WRITE_ONCE(shared_var, new_val);   /* don't optimize away the write */
+/* READ_ONCE / WRITE_ONCE: このアクセスが意図的に非同期であることを */
+/* コンパイラとKCSANの両方に伝える */
+int val = READ_ONCE(shared_var);   /* 読み出しを最適化で消させない */
+WRITE_ONCE(shared_var, new_val);   /* 書き込みを最適化で消させない */
 
-/* For intentional data races (lossy counters, heuristics): */
-/* data_race() marks an access as intentionally racy: */
+/* 意図的なデータ競合（不正確でよいカウンタ、ヒューリスティクス）の場合: */
+/* data_race()はアクセスを意図的に競合するものとしてマークする: */
 int approximate_count = data_race(shared_counter);
 
-/* __no_kcsan: suppress instrumentation for the entire function */
+/* __no_kcsan: 関数全体の計装を抑制する */
 void __no_kcsan my_racy_function(void)
 {
-    /* KCSAN won't instrument this function */
+    /* KCSANはこの関数を計装しない */
 }
 ```
 
-## Atomic operations and KCSAN {#atomic-operations-and-kcsan}
+## アトミック操作とKCSAN {#atomic-operations-and-kcsan}
 
-Atomic operations are not races:
+アトミック操作は競合ではない:
 
 ```c
-/* These are fine (atomic, not a race): */
-atomic_inc(&counter);              /* atomic read-modify-write */
+/* これらは問題ない（アトミックであり、競合ではない）: */
+atomic_inc(&counter);              /* アトミックなread-modify-write */
 atomic_cmpxchg(&ptr, old, new);    /* compare-and-swap */
 
-/* smp_load_acquire / smp_store_release: acquire/release barriers */
-/* Also recognized by KCSAN as synchronized access: */
+/* smp_load_acquire / smp_store_release: acquire/releaseバリア */
+/* これらもKCSANには同期されたアクセスとして認識される: */
 old = smp_load_acquire(&ptr);
 smp_store_release(&ptr, new);
 ```
 
-## Linux Kernel Memory Model (LKMM) {#linux-kernel-memory-model-lkmm}
+## Linux Kernel Memory Model（LKMM） {#linux-kernel-memory-model-lkmm}
 
-KCSAN is designed to enforce the **Linux Kernel Memory Model**, which defines the formal semantics of concurrent kernel code:
+KCSANは、並行カーネルコードの形式的なセマンティクスを定義する**Linux Kernel Memory Model**を強制するよう設計されている:
 
 ```c
-/* LKMM rules (simplified): */
+/* LKMMの規則（簡略化）: */
 
-/* 1. Plain accesses (x = y) are only allowed if no other CPU writes x
-      concurrently without synchronization */
+/* 1. プレーンアクセス（x = y）は、他のCPUが同期なしで並行してxに
+      書き込まない場合にのみ許される */
 
-/* 2. ACQUIRE/RELEASE barriers provide ordering:
-      lock()/unlock() pair gives:
-        all accesses before lock() happen-before all accesses after unlock() */
+/* 2. ACQUIRE/RELEASEバリアは順序付けを提供する:
+      lock()/unlock()の対により:
+        lock()より前のすべてのアクセスはunlock()より後のすべてのアクセスにhappen-beforeする */
 
-/* 3. smp_mb() / smp_rmb() / smp_wmb() provide full barriers */
+/* 3. smp_mb() / smp_rmb() / smp_wmb()はフルバリアを提供する */
 
-/* 4. READ_ONCE/WRITE_ONCE prevent compiler reordering */
+/* 4. READ_ONCE/WRITE_ONCEはコンパイラによる並べ替えを防ぐ */
 
-/* Example correct code: */
+/* 正しいコードの例: */
 static DEFINE_SPINLOCK(lock);
 static int shared_var;
 
 void writer(int val)
 {
     spin_lock(&lock);
-    WRITE_ONCE(shared_var, val);  /* also ok: just shared_var = val under lock */
+    WRITE_ONCE(shared_var, val);  /* ロック下なら単にshared_var = valでもよい */
     spin_unlock(&lock);
 }
 
@@ -152,87 +152,87 @@ int reader(void)
 }
 ```
 
-## KCSAN vs other sanitizers {#kcsan-vs-other-sanitizers}
+## KCSANと他のサニタイザの比較 {#kcsan-vs-other-sanitizers}
 
 | | KCSAN | KASAN | ThreadSanitizer |
 |---|-------|-------|-----------------|
-| Detects | Data races | Memory errors (UAF, OOB) | Data races |
-| Approach | Watchpoints (probabilistic) | Shadow memory (deterministic) | Shadow memory |
-| Overhead | ~5% (watchpoints) | ~2x memory, 2x CPU | ~5-15x CPU |
-| False positives | Very few | None | Some |
-| Context | Kernel only | Kernel only | Userspace |
+| 検出対象 | データ競合 | メモリエラー（UAF、OOB） | データ競合 |
+| 方式 | ウォッチポイント（確率的） | シャドウメモリ（決定的） | シャドウメモリ |
+| オーバーヘッド | 約5%（ウォッチポイント） | メモリ約2倍、CPU約2倍 | CPU約5〜15倍 |
+| 誤検知 | ごく少ない | なし | 一部あり |
+| 対象 | カーネルのみ | カーネルのみ | ユーザー空間 |
 
-## syzkaller integration {#syzkaller-integration}
+## syzkallerとの統合 {#syzkaller-integration}
 
-syzkaller (kernel fuzzer) combined with KCSAN finds races in new syscall paths:
+syzkaller（カーネルファザー）とKCSANを組み合わせると、新しいシステムコールパスの競合を見つけられる:
 
 ```bash
-# KCSAN in syzkaller config (syzkaller/tools/syz-env):
+# syzkaller設定でのKCSAN（syzkaller/tools/syz-env）:
 "kernel_config": "CONFIG_KCSAN=y,CONFIG_KCSAN_INTERRUPT_WATCHER=y,..."
 
-# syzkaller spawns multiple VMs executing syscalls in parallel
-# KCSAN watchpoints detect races between concurrent syscall invocations
+# syzkallerはシステムコールを並列に実行する複数のVMを起動する
+# KCSANのウォッチポイントが並行するシステムコール呼び出し間の競合を検出する
 ```
 
-## Debugging a reported race {#debugging-a-reported-race}
+## 報告された競合のデバッグ {#debugging-a-reported-race}
 
 ```bash
-# 1. Capture the race:
+# 1. 競合を取得する:
 dmesg | grep -A 30 "KCSAN"
 
-# 2. Use addr2line to find source:
+# 2. addr2lineでソースを特定する:
 addr2line -e vmlinux -i 0xffffffff12345678
 # → mm/slub.c:3456
 
-# 3. Check git log for recent changes:
+# 3. git logで最近の変更を確認する:
 git log --oneline mm/slub.c | head -10
 
-# 4. Reproduce more reliably (if possible):
-# There is no debugfs delay knob -- delay tuning is a pair of writable
-# module params, kcsan.udelay_task / kcsan.udelay_interrupt (kernel/kcsan/core.c),
-# exposed under /sys/module/kcsan/parameters/:
-echo 100 > /sys/module/kcsan/parameters/udelay_task  # raise the max delay to 100us
-# CONFIG_KCSAN_DELAY_RANDOMIZE=y (the default) subtracts a random amount from
-# this value on each access; rebuilding with it set to =n makes the delay
-# exactly udelay_task every time, for fully deterministic reproduction.
+# 4. より確実に再現する（可能なら）:
+# debugfsの遅延ノブは存在しない -- 遅延の調整は書き込み可能な2つの
+# モジュールパラメータ kcsan.udelay_task / kcsan.udelay_interrupt（kernel/kcsan/core.c）で行い、
+# /sys/module/kcsan/parameters/ 以下に公開されている:
+echo 100 > /sys/module/kcsan/parameters/udelay_task  # 最大遅延を100usに引き上げる
+# CONFIG_KCSAN_DELAY_RANDOMIZE=y（デフォルト）はアクセスごとにこの値から
+# ランダムな量を差し引く。=nにしてリビルドすると遅延は毎回ちょうど
+# udelay_taskになり、完全に決定的な再現ができる。
 
-# 5. Fix options:
-# a. Add proper locking
-# b. Use atomic operations
-# c. Annotate with data_race() if intentional and safe
-# d. Use READ_ONCE/WRITE_ONCE for benign races
+# 5. 修正の選択肢:
+# a. 適切なロックを追加する
+# b. アトミック操作を使う
+# c. 意図的かつ安全ならdata_race()でアノテーションする
+# d. 無害な競合にはREAD_ONCE/WRITE_ONCEを使う
 
-# 6. Verify fix:
-# Run syzkaller or stress test with KCSAN enabled
-# No new race reports for the same location
+# 6. 修正を検証する:
+# KCSANを有効にしてsyzkallerまたはストレステストを実行する
+# 同じ箇所について新たな競合レポートが出ないこと
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/kcsan/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kcsan/core.c) — the watchpoint-based race detection engine
-- [kernel/kcsan/report.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kcsan/report.c) — report formatting: the two racing call stacks and the "value changed" line
-- [kernel/kcsan/debugfs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kcsan/debugfs.c) — the `/sys/kernel/debug/kcsan` control file (on/off, blacklist/whitelist)
-- [lib/Kconfig.kcsan](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.kcsan) — Kconfig options and defaults (`KCSAN_NUM_WATCHPOINTS` defaults to 64, `KCSAN_REPORT_ONCE_IN_MS` defaults to 3000, `KCSAN_DELAY_RANDOMIZE` defaults to y)
-- [include/linux/compiler.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/compiler.h) — `data_race()` macro definition
-- [include/linux/compiler_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/compiler_types.h) — `__no_kcsan` function attribute definition
-- [Documentation/dev-tools/kcsan.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/dev-tools/kcsan.rst) — official KCSAN documentation
-- [tools/memory-model/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/memory-model/) — Linux Kernel Memory Model (LKMM) formal specification
+- [kernel/kcsan/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kcsan/core.c) — ウォッチポイントベースの競合検出エンジン
+- [kernel/kcsan/report.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kcsan/report.c) — レポートの整形: 競合する2つのコールスタックと「value changed」行
+- [kernel/kcsan/debugfs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kcsan/debugfs.c) — `/sys/kernel/debug/kcsan`制御ファイル（オン/オフ、ブラックリスト/ホワイトリスト）
+- [lib/Kconfig.kcsan](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.kcsan) — Kconfigオプションとデフォルト値（`KCSAN_NUM_WATCHPOINTS`のデフォルトは64、`KCSAN_REPORT_ONCE_IN_MS`のデフォルトは3000、`KCSAN_DELAY_RANDOMIZE`のデフォルトはy）
+- [include/linux/compiler.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/compiler.h) — `data_race()`マクロの定義
+- [include/linux/compiler_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/compiler_types.h) — `__no_kcsan`関数属性の定義
+- [Documentation/dev-tools/kcsan.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/dev-tools/kcsan.rst) — 公式のKCSANドキュメント
+- [tools/memory-model/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/memory-model/) — Linux Kernel Memory Model（LKMM）の形式仕様
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [KASAN](../mm/kasan.md) — memory error detection (use-after-free, OOB)
-- [KFENCE](../mm/kfence.md) — lightweight sampling memory error detector
-- [Atomics and Memory Barriers](../locking/atomics.md) — correct concurrent access
-- [RCU](../locking/rcu.md) — RCU is a race-free read-mostly pattern
-- [Spinlock](../locking/spinlock.md) — spinlocks prevent races
+- [KASAN](../mm/kasan.md) — メモリエラー検出（use-after-free、OOB）
+- [KFENCE](../mm/kfence.md) — 軽量なサンプリング型メモリエラー検出器
+- [アトミック操作とメモリバリア](../locking/atomics.md) — 正しい並行アクセス
+- [RCU](../locking/rcu.md) — RCUは競合のない、読み取り中心のパターンである
+- [spinlock](../locking/spinlock.md) — spinlockは競合を防ぐ
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Finding race conditions with KCSAN](https://lwn.net/Articles/802128/) — Jonathan Corbet's introduction to KCSAN shortly after it was announced (October 2019, ahead of its eventual merge in 5.8)
-- [Concurrency bugs should fear the big bad data-race detector](https://lwn.net/Articles/816850/) — a joint writeup by the KCSAN and Linux Kernel Memory Model developers on how the two projects fit together (April 2020)
+- [Finding race conditions with KCSAN](https://lwn.net/Articles/802128/) — 発表直後のJonathan CorbetによるKCSANの紹介（2019年10月。最終的に5.8でマージされる前）
+- [Concurrency bugs should fear the big bad data-race detector](https://lwn.net/Articles/816850/) — KCSANとLinux Kernel Memory Modelの開発者が共同で執筆した、2つのプロジェクトがどう噛み合うかの解説（2020年4月）
 
-### External {#external}
+### 外部資料 {#external}
 
-- [docs.kernel.org: Kernel Concurrency Sanitizer (KCSAN)](https://docs.kernel.org/dev-tools/kcsan.html) — rendered official documentation, including the debugfs interface and tuning parameters
+- [docs.kernel.org: Kernel Concurrency Sanitizer (KCSAN)](https://docs.kernel.org/dev-tools/kcsan.html) — レンダリングされた公式ドキュメント。debugfsインターフェースやチューニング用パラメータを含む

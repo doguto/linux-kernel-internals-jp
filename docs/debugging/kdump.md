@@ -1,10 +1,10 @@
-# kdump and crash {#kdump-and-crash}
+# kdumpとcrash {#kdump-and-crash}
 
-> Capturing and analyzing kernel crash dumps
+> カーネルクラッシュダンプの取得と解析
 
-## How kdump works {#how-kdump-works}
+## kdumpの仕組み {#how-kdump-works}
 
-kdump uses `kexec` to pre-load a second "capture kernel" into a reserved region of memory. When the primary kernel crashes (panic), it hands control to the capture kernel via kexec. The capture kernel boots, saves the first kernel's memory (the "vmcore") to disk, and reboots.
+kdumpは`kexec`を使い、2つ目の「キャプチャカーネル」をメモリの予約領域にあらかじめロードしておく。プライマリカーネルがクラッシュ（パニック）すると、kexec経由でキャプチャカーネルに制御を渡す。キャプチャカーネルは起動し、1つ目のカーネルのメモリ（「vmcore」）をディスクに保存して再起動する。
 
 ```
 Normal operation:
@@ -23,34 +23,34 @@ Capture kernel:
   System reboots
 ```
 
-## Setup {#setup}
+## セットアップ {#setup}
 
-### Step 1: Reserve memory for capture kernel {#step-1-reserve-memory-for-capture-kernel}
+### ステップ1: キャプチャカーネル用のメモリを予約する {#step-1-reserve-memory-for-capture-kernel}
 
-Add to kernel boot parameters:
+カーネルのブートパラメータに追加する:
 
 ```bash
-# /etc/default/grub (or equivalent)
+# /etc/default/grub（または同等のファイル）
 GRUB_CMDLINE_LINUX="crashkernel=256M"
-# Reserve 256MB for the capture kernel at a high address
+# キャプチャカーネル用に256MBを高位アドレスに予約する
 
-# For systems with > 4GB RAM (common):
-crashkernel=256M,high   # prefer high memory
-crashkernel=64M,low     # also reserve 64MB in low memory (for DMA)
+# 4GBを超えるRAMを持つシステムの場合（一般的）:
+crashkernel=256M,high   # 高位メモリを優先
+crashkernel=64M,low     # 低位メモリにも64MBを予約（DMA用）
 
-# Regenerate grub config
+# grubの設定を再生成する
 sudo update-grub
 sudo reboot
 ```
 
 ```bash
-# Verify reservation after boot
+# 起動後に予約を確認する
 cat /proc/cmdline | grep crashkernel
 dmesg | grep "crashkernel"
 # crashkernel: memory value: 0x10000000 at 0x100000000
 ```
 
-### Step 2: Install and configure kdump {#step-2-install-and-configure-kdump}
+### ステップ2: kdumpをインストールして設定する {#step-2-install-and-configure-kdump}
 
 ```bash
 # Debian/Ubuntu
@@ -59,10 +59,10 @@ sudo apt install kdump-tools
 # RHEL/Fedora
 sudo dnf install kexec-tools
 
-# Start kdump service (loads capture kernel via kexec)
+# kdumpサービスを開始する（kexec経由でキャプチャカーネルをロードする）
 sudo systemctl enable --now kdump
 
-# Verify kdump is ready
+# kdumpの準備ができていることを確認する
 sudo kdump-config show
 # DUMP_MODE:        kdump
 # USE_KDUMP:        1
@@ -70,42 +70,42 @@ sudo kdump-config show
 # current state:    ready to kdump
 ```
 
-### Step 3: Test kdump {#step-3-test-kdump}
+### ステップ3: kdumpをテストする {#step-3-test-kdump}
 
 ```bash
-# Force a crash to test (writes crash dump then reboots)
+# テストのために強制的にクラッシュさせる（クラッシュダンプを書き出してから再起動する）
 echo 1 > /proc/sys/kernel/sysrq
 echo c > /proc/sysrq-trigger
 
-# After reboot: check /var/crash/
+# 再起動後: /var/crash/を確認する
 ls /var/crash/
 # 202601301234/  vmcore  vmcore-dmesg.txt
 ```
 
-## Analyzing a crash dump with crash {#analyzing-a-crash-dump-with-crash}
+## crashによるクラッシュダンプの解析 {#analyzing-a-crash-dump-with-crash}
 
-The `crash` tool is the standard way to analyze vmcore files:
+`crash`ツールはvmcoreファイルを解析する標準的な方法である:
 
 ```bash
-# Install crash
+# crashをインストールする
 sudo apt install crash   # Debian/Ubuntu
 sudo dnf install crash   # RHEL
 
-# Open the crash dump
+# クラッシュダンプを開く
 crash /usr/lib/debug/boot/vmlinux-$(uname -r) /var/crash/*/vmcore
-# Or with a kernel debuginfo package:
+# あるいはカーネルのdebuginfoパッケージを使う場合:
 crash /path/to/vmlinux vmcore
 ```
 
-### crash command reference {#crash-command-reference}
+### crashコマンドリファレンス {#crash-command-reference}
 
-Once inside crash:
+crashの中に入ったら:
 
 ```
-crash> help          # list all commands
+crash> help          # 全コマンドを一覧表示
 
-# System information
-crash> sys           # kernel version, panic string, uptime
+# システム情報
+crash> sys           # カーネルバージョン、パニック文字列、稼働時間
 # KERNEL: /usr/lib/debug/.../vmlinux
 # DUMPFILE: vmcore  [PARTIAL DUMP]
 # CPUS: 8
@@ -113,44 +113,44 @@ crash> sys           # kernel version, panic string, uptime
 # UPTIME: 2 days, 03:21:45
 # PANIC: "general protection fault, maybe for address..."
 
-# The panic message and task
-crash> bt            # backtrace of the crashing task
-crash> bt -a         # backtraces of all tasks
-crash> bt <pid>      # backtrace of specific task
+# パニックメッセージとタスク
+crash> bt            # クラッシュしたタスクのバックトレース
+crash> bt -a         # 全タスクのバックトレース
+crash> bt <pid>      # 特定タスクのバックトレース
 
-# Process information
-crash> ps            # process list (like ps aux)
-crash> ps -t         # thread list
-crash> task <pid>    # full task_struct of a process
-crash> files <pid>   # open files of a process
+# プロセス情報
+crash> ps            # プロセス一覧（ps auxと同様）
+crash> ps -t         # スレッド一覧
+crash> task <pid>    # プロセスのtask_struct全体
+crash> files <pid>   # プロセスが開いているファイル
 
-# Memory inspection
-crash> rd address 16          # read 16 words at address
-crash> wr address value       # write (modify vmcore — dangerous)
-crash> kmem -i                # memory info
-crash> kmem -z                # zone info
-crash> kmem -s                # slab info
+# メモリの調査
+crash> rd address 16          # addressから16ワードを読む
+crash> wr address value       # 書き込み（vmcoreを変更する — 危険）
+crash> kmem -i                # メモリ情報
+crash> kmem -z                # ゾーン情報
+crash> kmem -s                # slab情報
 
-# Kernel structures
-crash> struct task_struct <address>      # pretty-print struct
-crash> p variable_name                   # print variable
-crash> p *((struct inode *)0xffff..)    # dereference pointer
+# カーネル構造体
+crash> struct task_struct <address>      # 構造体を整形表示
+crash> p variable_name                   # 変数を表示
+crash> p *((struct inode *)0xffff..)    # ポインタを参照外し
 
-# Modules
-crash> mod                    # list modules
-crash> mod -s mymodule /path/to/mymodule.ko  # load module symbols
+# モジュール
+crash> mod                    # モジュール一覧
+crash> mod -s mymodule /path/to/mymodule.ko  # モジュールのシンボルをロード
 
-# Virtual memory
-crash> vm <pid>               # VMAs of process
-crash> pte <address>          # page table entry
-crash> vtop <virtual>         # virtual→physical translation
+# 仮想メモリ
+crash> vm <pid>               # プロセスのVMA
+crash> pte <address>          # ページテーブルエントリ
+crash> vtop <virtual>         # 仮想→物理アドレス変換
 
-# Log
-crash> log                    # kernel ring buffer from vmcore
-crash> log -m                 # include timestamp prefix
+# ログ
+crash> log                    # vmcore中のカーネルリングバッファ
+crash> log -m                 # タイムスタンプのプレフィックスを含める
 ```
 
-### Reading the backtrace {#reading-the-backtrace}
+### バックトレースの読み方 {#reading-the-backtrace}
 
 ```
 crash> bt
@@ -169,113 +169,113 @@ PID: 1234   TASK: ffff888012345678  CPU: 3   COMMAND: "myapp"
     RAX: 0000000000000000  RBX: ffff888001234567  RCX: 0000000000000000
 ```
 
-Each frame shows: frame number, kernel stack address, function name, source address.
+各フレームには、フレーム番号、カーネルスタックのアドレス、関数名、ソースアドレスが表示される。
 
-### Inspecting the crashing code {#inspecting-the-crashing-code}
+### クラッシュしたコードの調査 {#inspecting-the-crashing-code}
 
 ```
-# Find the faulting instruction
-crash> dis -l ffffffff81066b8e     # disassemble with source lines
+# フォールトした命令を見つける
+crash> dis -l ffffffff81066b8e     # ソース行付きで逆アセンブル
 # do_user_addr_fault():
 # /build/linux/arch/x86/mm/fault.c: 1402
-# 0xffffffff81066b80: mov    (%rbx),%rax    ← NULL deref here
+# 0xffffffff81066b80: mov    (%rbx),%rax    ← ここでNULL参照外し
 # 0xffffffff81066b83: test   %rax,%rax
 
-# Print the faulting variable
+# フォールトした変数を表示する
 crash> p my_struct->field
 
-# Find what module a function belongs to
+# 関数がどのモジュールに属するかを調べる
 crash> sym ffffffffc0a01234
 # ffffffffc0a01234 (t) mymodule_function [mymodule]
 ```
 
 ## makedumpfile {#makedumpfile}
 
-Raw vmcore files can be very large (equal to physical RAM). `makedumpfile` compresses and filters them:
+生のvmcoreファイルは非常に大きくなりうる（物理RAMと同じサイズ）。`makedumpfile`はそれを圧縮し、フィルタリングする:
 
 ```bash
-# Create compressed dump, excluding zero pages and free pages
+# ゼロページと空きページを除外した圧縮ダンプを作成する
 makedumpfile -c -d 31 /proc/vmcore /var/crash/dump
 
-# Compression levels: -d N where bits mean:
-# bit 0 (1): zero pages
-# bit 1 (2): cache pages
-# bit 2 (4): cache private
-# bit 3 (8): user-space pages
-# bit 4 (16): free pages
-# 31 = all of the above
+# 除外レベル: -d N の各ビットの意味:
+# bit 0 (1): ゼロページ
+# bit 1 (2): キャッシュページ
+# bit 2 (4): キャッシュ（プライベート）
+# bit 3 (8): ユーザー空間ページ
+# bit 4 (16): 空きページ
+# 31 = 上記すべて
 
-# For later analysis on a different machine:
+# 別のマシンで後から解析するために:
 makedumpfile --dump-dmesg /proc/vmcore dmesg.txt
 ```
 
-## pstore: persistent storage across reboots {#pstore-persistent-storage-across-reboots}
+## pstore: 再起動をまたぐ永続ストレージ {#pstore-persistent-storage-across-reboots}
 
-For embedded systems or when full kdump is impractical, pstore saves the kernel console log and oops backtraces to persistent storage (ACPI APEI, NVRAM, MTD flash, ramoops):
+組み込みシステムや、完全なkdumpが現実的でない場合には、pstoreがカーネルのコンソールログとoopsのバックトレースを永続ストレージ（ACPI APEI、NVRAM、MTDフラッシュ、ramoops）に保存する:
 
 ```bash
-# ramoops: reserve RAM region that survives kexec
-# (add to boot parameters)
+# ramoops: kexecをまたいで残るRAM領域を予約する
+# （ブートパラメータに追加する）
 ramoops.mem_address=0x8f000000 ramoops.mem_size=0x100000
 
-# After crash/reboot, read saved logs:
+# クラッシュ/再起動後、保存されたログを読む:
 ls /sys/fs/pstore/
 # dmesg-ramoops-0   (console output before crash)
 # console-ramoops-0
 
 cat /sys/fs/pstore/dmesg-ramoops-0
 
-# Erase after reading (pstore files are deleted by removing them)
+# 読んだ後に消去する（pstoreのファイルは削除することで消える）
 rm /sys/fs/pstore/dmesg-ramoops-0
 ```
 
-## Observing panic behavior {#observing-panic-behavior}
+## パニック時の挙動の確認 {#observing-panic-behavior}
 
 ```bash
-# Control what happens on panic
+# パニック時の動作を制御する
 cat /proc/sys/kernel/panic
-# 0 = hang (default)
-# N > 0 = reboot after N seconds
-# N < 0 = reboot immediately
+# 0 = ハングする（デフォルト）
+# N > 0 = N秒後に再起動
+# N < 0 = 即座に再起動
 echo 10 > /proc/sys/kernel/panic
 
-# Panic on any oops (not just fatal ones)
+# あらゆるoopsでパニックする（致命的なものだけでなく）
 echo 1 > /proc/sys/kernel/panic_on_oops
 
-# Panic on soft lockup (hung task watchdog)
+# ソフトロックアップでパニックする（ハングタスクのウォッチドッグ）
 echo 1 > /proc/sys/kernel/softlockup_panic
 
-# Hung task timeout (panic after N seconds of task stuck)
+# ハングタスクのタイムアウト（タスクがN秒停止したらパニック）
 echo 120 > /proc/sys/kernel/hung_task_timeout_secs
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — `panic_timeout` and `panic_on_oops`: the variables behind the `kernel.panic` and `kernel.panic_on_oops` sysctl entries in `kern_panic_table[]`
-- [kernel/watchdog.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/watchdog.c) — `softlockup_panic`: the variable behind `kernel.softlockup_panic`, checked when the soft lockup watchdog fires
-- [kernel/hung_task.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/hung_task.c) — `sysctl_hung_task_timeout_secs`: backs `kernel.hung_task_timeout_secs`
-- [fs/pstore/ram.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/pstore/ram.c) — `mem_address`/`mem_size` module parameters: back the `ramoops.mem_address=`/`ramoops.mem_size=` boot parameters used to reserve the ramoops region
+- [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — `panic_timeout`と`panic_on_oops`: `kern_panic_table[]`にある`kernel.panic`および`kernel.panic_on_oops` sysctlエントリの実体となる変数
+- [kernel/watchdog.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/watchdog.c) — `softlockup_panic`: `kernel.softlockup_panic`の実体となる変数で、ソフトロックアップのウォッチドッグが発火したときに確認される
+- [kernel/hung_task.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/hung_task.c) — `sysctl_hung_task_timeout_secs`: `kernel.hung_task_timeout_secs`の実体
+- [fs/pstore/ram.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/pstore/ram.c) — `mem_address`/`mem_size`モジュールパラメータ: ramoops領域の予約に使う`ramoops.mem_address=`/`ramoops.mem_size=`ブートパラメータの実体
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`kexec_load(2)`](https://man7.org/linux/man-pages/man2/kexec_load.2.html) — documents `KEXEC_ON_CRASH`, the flag that registers a kernel image as the crash kernel loaded into the memory reserved by `crashkernel=`
+- [`kexec_load(2)`](https://man7.org/linux/man-pages/man2/kexec_load.2.html) — `KEXEC_ON_CRASH`を説明している。これはカーネルイメージを、`crashkernel=`で予約されたメモリにロードされるクラッシュカーネルとして登録するフラグである
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Oops analysis](oops-analysis.md) — reading oops without crash tool
-- [KGDB](kgdb.md) — live kernel debugging
-- [Kernel Panic and Oops](../kernel/panic-oops.md) — the `die()`/`panic()` code path that actually triggers kdump (`crash_kexec()`/`__crash_kexec()`)
-- [Memory Management: KASAN](../mm/kasan.md) — catching use-after-free before crashes
-- [Memory Management: KFENCE](../mm/kfence.md) — lightweight memory error detection
+- [Oops解析](oops-analysis.md) — crashツールを使わずにoopsを読む
+- [KGDB](kgdb.md) — 稼働中カーネルのデバッグ
+- [カーネルパニックとOops](../kernel/panic-oops.md) — 実際にkdumpを起動する`die()`/`panic()`のコードパス（`crash_kexec()`/`__crash_kexec()`）
+- [メモリ管理: KASAN](../mm/kasan.md) — クラッシュする前にuse-after-freeを捕まえる
+- [メモリ管理: KFENCE](../mm/kfence.md) — 軽量なメモリエラー検出
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Crash dumps with kexec](https://lwn.net/Articles/108595/) — Jonathan Corbet on the original kexec-based crash dump design (2004)
-- [Persistent storage for a kernel's "dying breath"](https://lwn.net/Articles/434821/) — Jake Edge's introduction to pstore (2011); ramoops, then a separate mechanism, was later refactored into a pstore backend, which is how it works today
+- [Crash dumps with kexec](https://lwn.net/Articles/108595/) — kexecベースのクラッシュダンプの当初の設計に関するJonathan Corbetの記事（2004）
+- [Persistent storage for a kernel's "dying breath"](https://lwn.net/Articles/434821/) — Jake Edgeによるpstoreの紹介（2011）。当時は別の仕組みだったramoopsは後にpstoreのバックエンドとしてリファクタリングされ、現在はその形で動作している
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Kdump](https://docs.kernel.org/admin-guide/kdump/kdump.html) — official kdump setup guide: `crashkernel=` syntax, `/proc/vmcore`, `makedumpfile` usage
-- [Ramoops oops/panic logger](https://docs.kernel.org/admin-guide/ramoops.html) — the ramoops pstore backend, including the `mem_address`/`mem_size` parameters
+- [Kdump](https://docs.kernel.org/admin-guide/kdump/kdump.html) — 公式のkdumpセットアップガイド: `crashkernel=`の構文、`/proc/vmcore`、`makedumpfile`の使い方
+- [Ramoops oops/panic logger](https://docs.kernel.org/admin-guide/ramoops.html) — ramoops pstoreバックエンド。`mem_address`/`mem_size`パラメータを含む

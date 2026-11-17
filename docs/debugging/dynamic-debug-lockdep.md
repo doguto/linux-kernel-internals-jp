@@ -1,31 +1,31 @@
-# lockdep in Practice {#lockdep-in-practice}
+# lockdepの実践 {#lockdep-in-practice}
 
-> Lock dependency tracking: reading splats, annotating false positives, and hunting impossible deadlocks
+> ロック依存関係の追跡: splatの読み方、誤検知へのアノテーション、ありえないはずのデッドロックの追跡
 
-## Why this page exists {#why-this-page-exists}
+## このページの目的 {#why-this-page-exists}
 
-`docs/locking/lockdep.md` covers lockdep fundamentals — what it is, how the dependency graph works, and lock classes. This page focuses on **practical debugging**: reading real splats, resolving false positives, writing correct annotations, and understanding lockdep's limits.
+`docs/locking/lockdep.md`ではlockdepの基礎、つまりlockdepとは何か、依存関係グラフがどう機能するか、ロッククラスについて扱っている。本ページは**実践的なデバッグ**に焦点を当てる: 実際のsplatの読み方、誤検知の解消、正しいアノテーションの書き方、そしてlockdepの限界の理解である。
 
 ---
 
-## Anatomy of a lockdep splat {#anatomy-of-a-lockdep-splat}
+## lockdep splatの構造 {#anatomy-of-a-lockdep-splat}
 
-When lockdep detects a potential deadlock, it prints a `WARNING: possible circular locking dependency detected` message. Here is a fully annotated example:
+lockdepはデッドロックの可能性を検出すると、`WARNING: possible circular locking dependency detected`というメッセージを出力する。以下に完全な注釈付きの例を示す:
 
 ```
 ======================================================
 WARNING: possible circular locking dependency detected
 6.8.0-rc3 #1 Not tainted
 ------------------------------------------------------
-kworker/u4:2/345 is trying to acquire lock:             ← (1) task + lock being acquired
+kworker/u4:2/345 is trying to acquire lock:             ← (1) タスク + 獲得しようとしているロック
 ffff888100ab1230 (&sb->s_type->i_mutex_key#3){+.+.}-{3:3}, at: inode_lock+0x1d/0x30
 
-but task is already holding:                            ← (2) lock(s) already held
+but task is already holding:                            ← (2) すでに保持しているロック
 ffff888100ab1278 (&ei->i_data_sem){++++}-{3:3}, at: ext4_write_begin+0x1f0/0x8c0
 
-which lock already depends on the new lock.             ← (3) conflict detected
+which lock already depends on the new lock.             ← (3) 衝突の検出
 
-the existing dependency chain (in reverse order) is:   ← (4) the cycle
+the existing dependency chain (in reverse order) is:   ← (4) 循環
 -> #1 (&ei->i_data_sem){++++}-{3:3}:
        lock_acquire+0xd8/0x390
        down_write+0x52/0x120
@@ -38,7 +38,7 @@ the existing dependency chain (in reverse order) is:   ← (4) the cycle
        inode_lock+0x1d/0x30
        do_truncate+0x91/0x160
 
-other info that might help us debug this:              ← (5) "who else holds what"
+other info that might help us debug this:              ← (5) 「誰が何を保持しているか」
  Possible unsafe locking scenario:
    CPU0                        CPU1
    ----                        ----
@@ -49,48 +49,48 @@ other info that might help us debug this:              ← (5) "who else holds w
    *** DEADLOCK ***
 ```
 
-**The four parts:**
+**4つの部分**:
 
-1. **Task + what it's trying to acquire** — the task name, PID, and the lock address + class name + annotation + the call site
-2. **Lock(s) currently held** — the chain of locks this task already holds (could be multiple)
-3. **Conflict statement** — lockdep says this new acquisition would create a cycle
-4. **Dependency chain in reverse** — `#1` is the first lock in the cycle, `#0` is the one being acquired; together they show the circular path
-5. **CPU0/CPU1 scenario** — lockdep spells out the exact interleaving that would deadlock
-
----
-
-## Lock annotations in the splat {#lock-annotations-in-the-splat}
-
-Each lock in the splat is annotated with `{+.+.}-{3:3}`:
-
-```
-{+.+.}  = usage in 4 contexts (hardirq-on, hardirq-off, softirq-on, softirq-off)
-           + = used in this context
-           . = not used in this context
-           - = used with IRQs disabled in this context
-
--{3:3}  = lock depth class: 3 = mutex (not spinlock, not rwsem read-side)
-           format is {hard-depth:soft-depth}
-```
-
-Common annotations:
-
-- `{+.+.}` — mutex taken in process context with IRQs enabled
-- `{-.-.}` — spinlock taken with IRQs disabled
-- `{++++}` — rwsem taken in all four contexts (e.g., i_data_sem)
+1. **タスク + 獲得しようとしているもの** — タスク名、PID、およびロックのアドレス + クラス名 + アノテーション + 呼び出し箇所
+2. **現在保持しているロック** — このタスクがすでに保持しているロックの連なり（複数の場合もある）
+3. **衝突の宣言** — この新たな獲得が循環を生むことをlockdepが述べている
+4. **逆順の依存関係チェーン** — `#1`が循環の最初のロック、`#0`が獲得しようとしているロックであり、両者で循環経路を示す
+5. **CPU0/CPU1のシナリオ** — デッドロックを起こす具体的なインターリーブをlockdepが書き出している
 
 ---
 
-## Lock classes and `lock_class_key` {#lock-classes-and-lockclasskey}
+## splat中のロックのアノテーション {#lock-annotations-in-the-splat}
 
-Lockdep tracks **classes**, not instances. Every lock instance of the same type shares a class and lockdep only tracks edges between classes.
+splat中の各ロックには`{+.+.}-{3:3}`のようなアノテーションが付く:
+
+```
+{+.+.}  = 4つのコンテキストでの使用状況（hardirq-on、hardirq-off、softirq-on、softirq-off）
+           + = このコンテキストで使用された
+           . = このコンテキストでは使用されていない
+           - = このコンテキストでIRQ無効状態で使用された
+
+-{3:3}  = ロックの深さクラス: 3 = mutex（spinlockでもrwsemの読み取り側でもない）
+           書式は{hard-depth:soft-depth}
+```
+
+よく見るアノテーション:
+
+- `{+.+.}` — IRQ有効のプロセスコンテキストで取得されたmutex
+- `{-.-.}` — IRQ無効で取得されたspinlock
+- `{++++}` — 4つのコンテキストすべてで取得されたrwsem（例: i_data_sem）
+
+---
+
+## ロッククラスと`lock_class_key` {#lock-classes-and-lockclasskey}
+
+lockdepは個々のインスタンスではなく**クラス**を追跡する。同じ種類のロックのインスタンスはすべて1つのクラスを共有し、lockdepはクラス間のエッジだけを追跡する。
 
 ```c
-/* A static lock gets its class key from the lock's own address: */
+/* 静的なロックは、ロック自身のアドレスからクラスキーを得る: */
 static DEFINE_SPINLOCK(my_lock);
-/* → class key = &my_lock, class name = "my_lock" */
+/* → クラスキー = &my_lock、クラス名 = "my_lock" */
 
-/* A dynamically allocated lock: ALL instances share ONE class key */
+/* 動的に割り当てられたロック: すべてのインスタンスが1つのクラスキーを共有する */
 struct my_obj {
     spinlock_t lock;
 };
@@ -98,12 +98,12 @@ struct my_obj {
 void init_my_obj(struct my_obj *obj)
 {
     spin_lock_init(&obj->lock);
-    /* All obj->lock instances share a single class, identified by
-       the static __key embedded in spin_lock_init() via macro expansion */
+    /* すべてのobj->lockインスタンスは単一のクラスを共有する。そのクラスは
+       マクロ展開でspin_lock_init()に埋め込まれた静的な__keyで識別される */
 }
 ```
 
-The class key is a `struct lock_class_key` that lives in the kernel's `.data` section. It is generated automatically by `spin_lock_init()`, `mutex_init()`, etc., via the macro (shown here for the non-`PREEMPT_RT`, `CONFIG_DEBUG_SPINLOCK=y` path — the actual init call is `__raw_spin_lock_init()`, not a plain `__spin_lock_init()`, and it also passes a lock-wait-type tag):
+クラスキーはカーネルの`.data`セクションに置かれる`struct lock_class_key`である。これは`spin_lock_init()`や`mutex_init()`などによって、マクロを介して自動的に生成される（ここでは非`PREEMPT_RT`、`CONFIG_DEBUG_SPINLOCK=y`の経路を示す。実際の初期化呼び出しは単なる`__spin_lock_init()`ではなく`__raw_spin_lock_init()`であり、ロック待ちの種類を示すタグも渡す）:
 
 ```c
 /* include/linux/spinlock.h: */
@@ -115,13 +115,13 @@ do {                                                           \
 } while (0)
 ```
 
-That `static struct lock_class_key __key` is the class key — one per call-site in source code, not per instance.
+この`static struct lock_class_key __key`がクラスキーであり、インスタンスごとではなく、ソースコード上の呼び出し箇所ごとに1つ存在する。
 
 ---
 
-## Splitting classes to resolve false positives {#splitting-classes-to-resolve-false-positives}
+## クラスを分割して誤検知を解消する {#splitting-classes-to-resolve-false-positives}
 
-Sometimes lockdep reports a false positive because two instances of the same lock type have legitimately different valid orderings. The classic example is **nested directory locks** in a filesystem:
+同じ種類のロックの2つのインスタンスが、正当に異なる有効な順序を持つために、lockdepが誤検知を報告することがある。典型例はファイルシステムにおける**入れ子になったディレクトリロック**である:
 
 ```
 Thread 1: rename(parent_dir/a → parent_dir/b)
@@ -131,17 +131,17 @@ Thread 2: rename(child_dir/x → parent_dir/y)
   → lock(child_inode_x), then lock(parent_inode)
 ```
 
-Lockdep sees: `i_mutex` → `i_mutex` in one order and `i_mutex` → `i_mutex` in the reverse order — a false positive, because the "parent always before child" invariant is safe.
+lockdepには、ある順序での`i_mutex` → `i_mutex`と、逆順での`i_mutex` → `i_mutex`が見える。これは誤検知である。「常に親を子より先に」という不変条件は安全だからである。
 
-**Solution 1: `lockdep_set_subclass()`**
+**解決策1: `lockdep_set_subclass()`**
 
 ```c
-/* Tell lockdep this lock instance is subclass N (0 = default): */
-lockdep_set_subclass(&inode->i_rwsem, I_MUTEX_PARENT);   /* subclass 0 */
-lockdep_set_subclass(&inode->i_rwsem, I_MUTEX_CHILD);    /* subclass 1 */
+/* このロックインスタンスがサブクラスNであることをlockdepに伝える（0 = デフォルト）: */
+lockdep_set_subclass(&inode->i_rwsem, I_MUTEX_PARENT);   /* サブクラス0 */
+lockdep_set_subclass(&inode->i_rwsem, I_MUTEX_CHILD);    /* サブクラス1 */
 
-/* Lockdep now allows PARENT→CHILD but reports CHILD→PARENT */
-/* Subclasses are defined in include/linux/fs.h: */
+/* これでlockdepはPARENT→CHILDを許可し、CHILD→PARENTを報告する */
+/* サブクラスはinclude/linux/fs.hで定義されている: */
 enum {
     I_MUTEX_NORMAL,
     I_MUTEX_PARENT,
@@ -152,7 +152,7 @@ enum {
 };
 ```
 
-**Solution 2: `lockdep_init_map()` with a separate key**
+**解決策2: 別のキーを使った`lockdep_init_map()`**
 
 ```c
 static struct lock_class_key dir_lock_key;
@@ -163,38 +163,38 @@ void init_inode(struct inode *inode, bool is_dir)
     struct lock_class_key *key = is_dir ? &dir_lock_key : &file_lock_key;
     lockdep_init_map(&inode->i_rwsem.dep_map, "i_rwsem", key, 0);
 }
-/* Now directories and files have separate lock classes */
+/* これでディレクトリとファイルは別々のロッククラスを持つ */
 ```
 
-`lockdep_set_subclass()` is preferred when there is a clear nesting level (parent/child). Separate keys are used when two groups of locks have completely independent ordering requirements.
+明確な入れ子レベル（親/子）がある場合は`lockdep_set_subclass()`が好まれる。2つのロック群がまったく独立した順序要件を持つ場合は、別々のキーを使う。
 
 ---
 
-## Runtime assertions {#runtime-assertions}
+## 実行時アサーション {#runtime-assertions}
 
 ### `lockdep_assert_held()` {#lockdepassertheld}
 
-Assert that the current task holds a specific lock. Use this at the top of functions that require a lock to be held by the caller:
+現在のタスクが特定のロックを保持していることをアサートする。呼び出し元がロックを保持している必要がある関数の先頭で使う:
 
 ```c
 /* fs/inode.c */
 static void inode_pin_lru_isolating(struct inode *inode)
 {
-    lockdep_assert_held(&inode->i_lock);   /* caller must hold i_lock */
+    lockdep_assert_held(&inode->i_lock);   /* 呼び出し元はi_lockを保持していなければならない */
     WARN_ON(inode_state_read(inode) & (I_LRU_ISOLATING | I_FREEING | I_WILL_FREE));
     inode_state_set(inode, I_LRU_ISOLATING);
 }
 ```
 
-If the assertion fails (lock is not held), lockdep prints a `WARNING` and a stack trace. With `CONFIG_PROVE_LOCKING=n`, the macro compiles away.
+アサーションが失敗すると（ロックが保持されていないと）、lockdepは`WARNING`とスタックトレースを出力する。`CONFIG_PROVE_LOCKING=n`の場合、このマクロはコンパイル時に消える。
 
 ### `lockdep_assert_not_held()` {#lockdepassertnot_held}
 
-Assert a lock is **not** held. Used for functions that cannot be called under a specific lock:
+ロックが保持されて**いない**ことをアサートする。特定のロックの下では呼び出せない関数に使う:
 
 ```c
-/* Cannot be called while holding the mm semaphore — would deadlock
-   because this function may try to acquire it internally: */
+/* mmセマフォを保持したまま呼び出してはならない — この関数は内部でそれを
+   獲得しようとする可能性があるため、デッドロックする: */
 void some_mm_operation(struct mm_struct *mm)
 {
     lockdep_assert_not_held(&mm->mmap_lock);
@@ -204,31 +204,31 @@ void some_mm_operation(struct mm_struct *mm)
 
 ### `lockdep_assert_held_write()` / `lockdep_assert_held_read()` {#lockdepassertheldwrite-lockdepassertheldread}
 
-For rwsems, assert the specific lock mode:
+rwsemの場合は、特定のロックモードをアサートする:
 
 ```c
-/* mm/vma.c — vma_adjust() no longer exists; VMA merge/split/adjust all go
-   through vma_merge_existing_range() and its siblings now: */
+/* mm/vma.c — vma_adjust()はもう存在しない。VMAのマージ/分割/調整はすべて
+   現在はvma_merge_existing_range()とその兄弟関数を経由する: */
 static __must_check struct vm_area_struct *vma_merge_existing_range(
         struct vma_merge_struct *vmg)
 {
     mmap_assert_write_locked(vmg->mm);
-    /* ... merge/adjust logic ... */
+    /* ... マージ/調整のロジック ... */
 }
 ```
 
-`mmap_assert_write_locked()` (`include/linux/mmap_lock.h`) is itself a thin wrapper — it just calls `rwsem_assert_held_write(&mm->mmap_lock)`, since `mmap_lock` is backed by a plain rwsem.
+`mmap_assert_write_locked()`（`include/linux/mmap_lock.h`）自体は薄いラッパーにすぎない。`mmap_lock`は普通のrwsemで実装されているので、単に`rwsem_assert_held_write(&mm->mmap_lock)`を呼ぶだけである。
 
 ---
 
-## Implementing custom primitives with lockdep {#implementing-custom-primitives-with-lockdep}
+## lockdepに対応した独自プリミティブの実装 {#implementing-custom-primitives-with-lockdep}
 
-If you write a custom locking primitive (e.g., a lock-free structure with manual memory ordering, or a per-object lock that wraps something else), you can make it visible to lockdep:
+独自のロックプリミティブ（例: 手動でメモリ順序を管理するロックフリー構造や、別の何かをラップするオブジェクトごとのロック）を書く場合、それをlockdepから見えるようにできる:
 
 ```c
 struct my_lock {
     atomic_t state;
-    struct lockdep_map dep_map;   /* embed lockdep metadata */
+    struct lockdep_map dep_map;   /* lockdepのメタデータを埋め込む */
 };
 
 static struct lock_class_key my_lock_key;
@@ -241,10 +241,10 @@ void my_lock_init(struct my_lock *l, const char *name)
 
 void my_lock_acquire(struct my_lock *l)
 {
-    /* Tell lockdep: exclusive acquire, not nested, return address */
+    /* lockdepに伝える: 排他的な獲得、入れ子なし、リターンアドレス */
     lock_acquire(&l->dep_map, 0, 0, 0, 1, NULL, _RET_IP_);
 
-    /* ... actual acquire logic ... */
+    /* ... 実際の獲得ロジック ... */
     while (atomic_cmpxchg(&l->state, 0, 1) != 0)
         cpu_relax();
 }
@@ -256,15 +256,15 @@ void my_lock_release(struct my_lock *l)
 }
 ```
 
-`lock_acquire()` and `lock_release()` are the lockdep hooks that `spin_lock()` etc. invoke internally (in `kernel/locking/lockdep.c`). Using them directly integrates your primitive into the dependency graph.
+`lock_acquire()`と`lock_release()`は、`spin_lock()`などが内部で（`kernel/locking/lockdep.c`において）呼び出すlockdepのフックである。これらを直接使うと、独自のプリミティブが依存関係グラフに組み込まれる。
 
 ---
 
-## Suppressing false positives (use sparingly) {#suppressing-false-positives-use-sparingly}
+## 誤検知の抑制（控えめに使うこと） {#suppressing-false-positives-use-sparingly}
 
 ### `lockdep_set_novalidate_class()` {#lockdepsetnovalidate_class}
 
-Mark a lock class as exempt from validation. **Avoid unless absolutely necessary** — it hides real bugs along with false positives:
+ロッククラスを検証の対象外としてマークする。**どうしても必要な場合以外は避けること**。誤検知とともに本物のバグも隠してしまう:
 
 ```c
 lockdep_set_novalidate_class(&my_lock);
@@ -272,43 +272,43 @@ lockdep_set_novalidate_class(&my_lock);
 
 ### `lockdep_off()` / `lockdep_on()` {#lockdepoff-lockdepon}
 
-Temporarily suspend lockdep for a code region that legitimately violates ordering (e.g., a self-test that deliberately creates a cycle):
+正当に順序に違反するコード領域（例: 意図的に循環を作るセルフテスト）で、lockdepを一時的に停止する:
 
 ```c
 lockdep_off();
-/* code that would trigger false lockdep warnings */
+/* lockdepの誤った警告を引き起こすコード */
 lockdep_on();
 ```
 
-These are process-local (they adjust a per-task counter). Do not use them to paper over real locking bugs.
+これらはプロセスローカルである（タスクごとのカウンタを調整する）。本物のロックのバグを取り繕うために使ってはならない。
 
 ---
 
-## Configuration {#configuration}
+## 設定 {#configuration}
 
 ```bash
-CONFIG_PROVE_LOCKING=y          # enables lockdep (required)
-CONFIG_DEBUG_LOCK_ALLOC=y       # detect use of uninitialized locks
-CONFIG_LOCKDEP=y                # pulled in by PROVE_LOCKING
-CONFIG_DEBUG_LOCKDEP=y          # extra lockdep self-checks (very slow)
-CONFIG_LOCK_STAT=y              # enables /proc/lock_stat
+CONFIG_PROVE_LOCKING=y          # lockdepを有効化（必須）
+CONFIG_DEBUG_LOCK_ALLOC=y       # 初期化されていないロックの使用を検出
+CONFIG_LOCKDEP=y                # PROVE_LOCKINGによって自動的に選択される
+CONFIG_DEBUG_LOCKDEP=y          # lockdep自身の追加チェック（非常に遅い）
+CONFIG_LOCK_STAT=y              # /proc/lock_statを有効化
 ```
 
 ---
 
-## Lockdep limits {#lockdep-limits}
+## lockdepの上限 {#lockdep-limits}
 
-Lockdep maintains a compile-time-bounded data structure. `MAX_LOCKDEP_KEYS` is a fixed cap; the others are Kconfig-tunable (`CONFIG_LOCKDEP_BITS`, `CONFIG_LOCKDEP_CHAINS_BITS`, `CONFIG_LOCKDEP_STACK_TRACE_BITS`), each defaulting to the value shown below (`MAX_STACK_TRACE_ENTRIES` defaults higher, to 2M, under `CONFIG_KASAN`):
+lockdepはコンパイル時に上限が決まるデータ構造を管理している。`MAX_LOCKDEP_KEYS`は固定の上限であり、それ以外はKconfigで調整できる（`CONFIG_LOCKDEP_BITS`、`CONFIG_LOCKDEP_CHAINS_BITS`、`CONFIG_LOCKDEP_STACK_TRACE_BITS`）。それぞれのデフォルトは以下に示す値である（`CONFIG_KASAN`のもとでは`MAX_STACK_TRACE_ENTRIES`のデフォルトはより大きい2Mになる）:
 
 ```c
 /* include/linux/lockdep_types.h, kernel/locking/lockdep_internals.h */
-#define MAX_LOCKDEP_KEYS        8192   /* max lock classes (fixed) */
-#define MAX_LOCKDEP_ENTRIES     (1UL << CONFIG_LOCKDEP_BITS)         /* default 32768 */
-#define MAX_LOCKDEP_CHAINS      (1UL << CONFIG_LOCKDEP_CHAINS_BITS)  /* default 65536 */
-#define MAX_STACK_TRACE_ENTRIES (1UL << CONFIG_LOCKDEP_STACK_TRACE_BITS)  /* default 524288 */
+#define MAX_LOCKDEP_KEYS        8192   /* ロッククラスの最大数（固定） */
+#define MAX_LOCKDEP_ENTRIES     (1UL << CONFIG_LOCKDEP_BITS)         /* デフォルト32768 */
+#define MAX_LOCKDEP_CHAINS      (1UL << CONFIG_LOCKDEP_CHAINS_BITS)  /* デフォルト65536 */
+#define MAX_STACK_TRACE_ENTRIES (1UL << CONFIG_LOCKDEP_STACK_TRACE_BITS)  /* デフォルト524288 */
 ```
 
-Once the tables are full, new lock classes are silently dropped — lockdep stops tracking them. Check usage at runtime:
+テーブルが一杯になると、新しいロッククラスは黙って捨てられ、lockdepはそれらを追跡しなくなる。実行時に使用状況を確認するには:
 
 ```bash
 cat /proc/lockdep_stats
@@ -323,19 +323,19 @@ dependency chains:                     8901 [max: 65536]
 stack-trace entries:                 234567 [max: 524288]
 ```
 
-If `lock-classes` is near the maximum, consider booting with a config that has fewer drivers, or increase `MAX_LOCKDEP_KEYS` in the source.
+`lock-classes`が上限に近い場合は、ドライバの少ない設定で起動するか、ソース中の`MAX_LOCKDEP_KEYS`を増やすことを検討する。
 
 ---
 
-## Lock contention statistics {#lock-contention-statistics}
+## ロック競合の統計 {#lock-contention-statistics}
 
-`CONFIG_LOCK_STAT=y` enables per-lock contention counters. Enable at runtime:
+`CONFIG_LOCK_STAT=y`はロックごとの競合カウンタを有効にする。実行時に有効化するには:
 
 ```bash
 echo 1 > /proc/sys/kernel/lock_stat
 ```
 
-Read statistics:
+統計を読むには:
 
 ```bash
 cat /proc/lock_stat
@@ -349,85 +349,85 @@ lock_stat version 0.4
                         &sb->s_type->i_mutex_key#3:            0             23           0.27          143.50        1423.10           5432        1234567          0.10           5.30        8901.20
 ```
 
-Key columns:
+主な列:
 
-- **con-bounces** — lock was contended and the CPU changed hands between acquire and release
-- **contentions** — total number of times a task had to wait for this lock
-- **waittime-min/max/total** — time spent waiting (microseconds)
-- **acq-bounces** — lock acquired but holder migrated to another CPU before releasing
-- **acquisitions** — total successful acquires
+- **con-bounces** — ロックが競合し、獲得から解放までの間にCPUが入れ替わった
+- **contentions** — タスクがこのロックを待たなければならなかった総回数
+- **waittime-min/max/total** — 待ちに費やした時間（マイクロ秒）
+- **acq-bounces** — ロックは獲得されたが、保持者が解放前に別のCPUへ移動した
+- **acquisitions** — 獲得に成功した総回数
 
-Reset statistics:
+統計をリセットするには:
 
 ```bash
 echo 0 > /proc/lock_stat
 ```
 
-High `contentions` on a specific lock class points to a bottleneck. High `waittime-max` indicates rare but very long stalls (often from priority inversion or a long critical section).
+特定のロッククラスで`contentions`が多い場合はボトルネックを示す。`waittime-max`が大きい場合は、まれだが非常に長いストール（優先度逆転や長いクリティカルセクションが原因であることが多い）を示す。
 
 ---
 
-## Workflow: debugging a lockdep splat {#workflow-debugging-a-lockdep-splat}
+## ワークフロー: lockdep splatのデバッグ {#workflow-debugging-a-lockdep-splat}
 
 ```bash
-# 1. Capture the full splat (it can be long):
+# 1. splat全体を取得する（長くなることがある）:
 dmesg | grep -A 80 "possible circular locking"
 
-# 2. Identify the two lock classes in the cycle:
-#    Look for "-> #1" and "-> #0" in the chain
+# 2. 循環に含まれる2つのロッククラスを特定する:
+#    チェーン中の"-> #1"と"-> #0"を探す
 
-# 3. Find where each lock is acquired:
-#    Each chain entry has a call stack — use addr2line:
+# 3. 各ロックが獲得される場所を見つける:
+#    各チェーンエントリにはコールスタックがある — addr2lineを使う:
 ./scripts/faddr2line vmlinux ext4_write_begin+0x1f0/0x8c0
 
-# 4. Draw the dependency graph on paper:
-#    Class A → Class B (acquired in this order somewhere)
-#    Class B → Class A (acquired in this order somewhere else)
-#    Find the inversion point
+# 4. 依存関係グラフを紙に描く:
+#    クラスA → クラスB（どこかでこの順序で獲得される）
+#    クラスB → クラスA（別の場所でこの順序で獲得される）
+#    逆転している箇所を見つける
 
-# 5. Fix options:
-#    a. Reorder acquisitions to be consistent everywhere
-#    b. Drop one lock before acquiring the other (if safe)
-#    c. Use trylock + retry loop to avoid blocking
-#    d. Split the class with lockdep_set_subclass() (if false positive)
-#    e. Use lockdep_assert_held() to enforce correct call ordering
+# 5. 修正の選択肢:
+#    a. どこでも一貫した順序で獲得するよう並べ替える
+#    b. もう一方を獲得する前に一方のロックを解放する（安全なら）
+#    c. ブロックを避けるためtrylock + リトライループを使う
+#    d. lockdep_set_subclass()でクラスを分割する（誤検知の場合）
+#    e. lockdep_assert_held()を使って正しい呼び出し順序を強制する
 
-# 6. Verify: rebuild and boot; the splat should not reappear
-#    (lockdep prints each unique cycle at most once per boot)
+# 6. 検証: リビルドして起動する。splatが再び現れなければよい
+#    （lockdepは一意な循環ごとに起動あたり最大1回しか出力しない）
 ```
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/locking/lockdep.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/locking/lockdep.c) — the validator implementation; `lock_acquire()` and `lock_release()` are the hooks that `spin_lock()`/`mutex_lock()` and friends call internally
-- [kernel/locking/lockdep_internals.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/locking/lockdep_internals.h) — `MAX_LOCKDEP_ENTRIES`, `MAX_LOCKDEP_CHAINS`, `MAX_STACK_TRACE_ENTRIES`; on current kernels these are derived from the `CONFIG_LOCKDEP_BITS`/`CONFIG_LOCKDEP_CHAINS_BITS`/`CONFIG_LOCKDEP_STACK_TRACE_BITS` Kconfig options rather than fixed at compile time
-- [include/linux/lockdep_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/lockdep_types.h) — `MAX_LOCKDEP_KEYS_BITS`/`MAX_LOCKDEP_KEYS`, the fixed cap on lock classes
-- [kernel/locking/lockdep_proc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/locking/lockdep_proc.c) — `/proc/lockdep_stats` and `/proc/lock_stat` output formatting (`lock-classes`, `con-bounces`, `contentions`, `waittime-min`, etc.)
-- [include/linux/fs.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) — the `I_MUTEX_NORMAL`/`I_MUTEX_PARENT`/`I_MUTEX_CHILD`/`I_MUTEX_XATTR`/`I_MUTEX_NONDIR2` subclass enum used with `lockdep_set_subclass()`
-- [include/linux/spinlock.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/spinlock.h) — `spin_lock_init()`, which allocates the per-call-site `lock_class_key`
-- [fs/inode.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/inode.c) — `inode_pin_lru_isolating()`, a real `lockdep_assert_held(&inode->i_lock)` call site
-- [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c) — `vma_merge_existing_range()`, the current VMA-merge path that asserts `mmap_assert_write_locked()`
+- [kernel/locking/lockdep.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/locking/lockdep.c) — バリデータの実装。`lock_acquire()`と`lock_release()`は、`spin_lock()`/`mutex_lock()`などが内部で呼ぶフックである
+- [kernel/locking/lockdep_internals.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/locking/lockdep_internals.h) — `MAX_LOCKDEP_ENTRIES`、`MAX_LOCKDEP_CHAINS`、`MAX_STACK_TRACE_ENTRIES`。現在のカーネルでは、これらはコンパイル時に固定されるのではなく、`CONFIG_LOCKDEP_BITS`/`CONFIG_LOCKDEP_CHAINS_BITS`/`CONFIG_LOCKDEP_STACK_TRACE_BITS`のKconfigオプションから導出される
+- [include/linux/lockdep_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/lockdep_types.h) — ロッククラス数の固定上限である`MAX_LOCKDEP_KEYS_BITS`/`MAX_LOCKDEP_KEYS`
+- [kernel/locking/lockdep_proc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/locking/lockdep_proc.c) — `/proc/lockdep_stats`と`/proc/lock_stat`の出力整形（`lock-classes`、`con-bounces`、`contentions`、`waittime-min`など）
+- [include/linux/fs.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) — `lockdep_set_subclass()`とともに使われる`I_MUTEX_NORMAL`/`I_MUTEX_PARENT`/`I_MUTEX_CHILD`/`I_MUTEX_XATTR`/`I_MUTEX_NONDIR2`サブクラスのenum
+- [include/linux/spinlock.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/spinlock.h) — 呼び出し箇所ごとの`lock_class_key`を確保する`spin_lock_init()`
+- [fs/inode.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/inode.c) — `inode_pin_lru_isolating()`。実際の`lockdep_assert_held(&inode->i_lock)`の呼び出し箇所
+- [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c) — `vma_merge_existing_range()`。`mmap_assert_write_locked()`をアサートする現在のVMAマージ経路
 - [include/linux/mmap_lock.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmap_lock.h) — `mmap_assert_write_locked()`/`mmap_assert_locked()`
-- [scripts/faddr2line](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/faddr2line) — resolves `func+0x123/0x456`-style offsets from a splat back to source lines
-- [Documentation/locking/lockdep-design.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/locking/lockdep-design.rst) — lockdep's own design document
-- [Documentation/locking/lockstat.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/locking/lockstat.rst) — `/proc/lock_stat` design document
+- [scripts/faddr2line](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/faddr2line) — splat中の`func+0x123/0x456`形式のオフセットをソース行に解決する
+- [Documentation/locking/lockdep-design.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/locking/lockdep-design.rst) — lockdep自身の設計文書
+- [Documentation/locking/lockstat.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/locking/lockstat.rst) — `/proc/lock_stat`の設計文書
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Lockdep fundamentals](../locking/lockdep.md) — dependency graph, lock classes, basic splat reading
-- [Lock Contention Debugging](../locking/lock-debugging.md) — `/proc/lock_stat`, perf lock
-- [KASAN and KFENCE](kasan-kfence.md) — complementary memory error detectors
-- [KCSAN](kcsan.md) — data race detection
+- [lockdepの基礎](../locking/lockdep.md) — 依存関係グラフ、ロッククラス、基本的なsplatの読み方
+- [ロック競合のデバッグ](../locking/lock-debugging.md) — `/proc/lock_stat`、perf lock
+- [KASANとKFENCE](kasan-kfence.md) — 相補的なメモリエラー検出器
+- [KCSAN](kcsan.md) — データ競合検出
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Enhancing lockdep with crossrelease](https://lwn.net/Articles/709849/) — Byungchul Park lays out lockdep's dependency-graph fundamentals (lock classes, cycle detection) before proposing the crossrelease extension (December 2016)
-- [The dependency tracker for complex deadlock detection](https://lwn.net/Articles/1036222/) — Jonathan Corbet on DEPT, a proposed lockdep alternative; explains what lockdep does and does not catch (September 2025)
+- [Enhancing lockdep with crossrelease](https://lwn.net/Articles/709849/) — Byungchul Parkが、crossrelease拡張を提案する前に、lockdepの依存関係グラフの基礎（ロッククラス、循環検出）を説明している（2016年12月）
+- [The dependency tracker for complex deadlock detection](https://lwn.net/Articles/1036222/) — lockdepの代替として提案されたDEPTに関するJonathan Corbetの記事。lockdepが捕まえられるもの・捕まえられないものを説明している（2025年9月）
 
-### External {#external}
+### 外部資料 {#external}
 
-- [docs.kernel.org: Runtime locking correctness validator](https://docs.kernel.org/locking/lockdep-design.html) — rendered version of lockdep-design.rst
-- [docs.kernel.org: Lock Statistics](https://docs.kernel.org/locking/lockstat.html) — rendered version of lockstat.rst
+- [docs.kernel.org: Runtime locking correctness validator](https://docs.kernel.org/locking/lockdep-design.html) — lockdep-design.rstのレンダリング版
+- [docs.kernel.org: Lock Statistics](https://docs.kernel.org/locking/lockstat.html) — lockstat.rstのレンダリング版

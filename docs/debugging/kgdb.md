@@ -1,10 +1,10 @@
-# KGDB: Kernel GDB Debugger {#kgdb-kernel-gdb-debugger}
+# KGDB: カーネルGDBデバッガ {#kgdb-kernel-gdb-debugger}
 
-> Live debugging of a running kernel with GDB
+> 稼働中のカーネルをGDBでライブデバッグする
 
-## Overview {#overview}
+## 概要 {#overview}
 
-KGDB allows debugging a live kernel using GDB as the front-end. The kernel halts at breakpoints and exposes a GDB remote protocol stub over a serial port. A second machine (or a VM host) runs GDB.
+KGDBは、GDBをフロントエンドとして稼働中のカーネルをデバッグできるようにする。カーネルはブレークポイントで停止し、シリアルポート経由でGDBリモートプロトコルのスタブを公開する。2台目のマシン（またはVMのホスト）でGDBを実行する。
 
 ```
 Target machine (running kernel to debug)
@@ -17,44 +17,44 @@ Host machine (running GDB)
   (gdb) target remote /dev/ttyS0
 ```
 
-For single-machine debugging, KGDB over a VM's virtual serial port is the most practical setup.
+1台のマシンでデバッグする場合は、VMの仮想シリアルポート経由のKGDBが最も実用的な構成である。
 
-## Kernel configuration {#kernel-configuration}
+## カーネルの設定 {#kernel-configuration}
 
 ```bash
-# Required kernel config options:
+# 必要なカーネル設定オプション:
 CONFIG_KGDB=y
-CONFIG_KGDB_SERIAL_CONSOLE=y   # kgdboc: KGDB over console
-CONFIG_KGDB_KDB=y              # optional: built-in KDB shell
-CONFIG_FRAME_POINTER=y         # reliable stack traces
-CONFIG_DEBUG_INFO=y            # symbol information in vmlinux
-CONFIG_GDB_SCRIPTS=y           # GDB python scripts for kernel types
+CONFIG_KGDB_SERIAL_CONSOLE=y   # kgdboc: コンソール経由のKGDB
+CONFIG_KGDB_KDB=y              # 任意: 組み込みのKDBシェル
+CONFIG_FRAME_POINTER=y         # 信頼できるスタックトレース
+CONFIG_DEBUG_INFO=y            # vmlinux内のシンボル情報
+CONFIG_GDB_SCRIPTS=y           # カーネルの型を扱うGDB Pythonスクリプト
 ```
 
-## Setting up the connection {#setting-up-the-connection}
+## 接続のセットアップ {#setting-up-the-connection}
 
-### Over serial (physical or VM) {#over-serial-physical-or-vm}
+### シリアル経由（物理またはVM） {#over-serial-physical-or-vm}
 
 ```bash
-# Target: configure kgdb to use serial port ttyS0 at 115200 baud
-# At boot (kernel parameter):
+# ターゲット: kgdbがシリアルポートttyS0を115200ボーで使うよう設定する
+# 起動時（カーネルパラメータ）:
 console=ttyS0,115200 kgdboc=ttyS0,115200 kgdbwait
 
-# kgdbwait halts early boot until a debugger attaches — without it, kgdboc
-# only registers the serial console as a kgdb I/O backend; the kernel keeps
-# booting and you have to trigger entry yourself (SysRq-g or a breakpoint).
+# kgdbwaitはデバッガがアタッチするまでブートの初期段階で停止する — これがないと、kgdbocは
+# シリアルコンソールをkgdbのI/Oバックエンドとして登録するだけで、カーネルはそのまま
+# 起動を続けるので、自分でデバッガへの突入を引き起こす必要がある（SysRq-gまたはブレークポイント）。
 
-# Or at runtime (if kernel supports it):
+# あるいは実行時に（カーネルが対応していれば）:
 echo ttyS0,115200 > /sys/module/kgdboc/parameters/kgdboc
 
-# Trigger entry into the debugger:
+# デバッガへの突入を引き起こす:
 echo g > /proc/sysrq-trigger
-# Or: send SysRq-g over serial: Alt+SysRq+g
-# Or: hit a breakpoint
+# または: シリアル経由でSysRq-gを送る: Alt+SysRq+g
+# または: ブレークポイントに到達させる
 ```
 
 ```bash
-# Host: connect GDB
+# ホスト: GDBを接続する
 gdb vmlinux
 (gdb) set serial baud 115200
 (gdb) target remote /dev/ttyS0
@@ -62,209 +62,209 @@ gdb vmlinux
 # (gdb) ...
 ```
 
-### There is no network transport in mainline {#there-is-no-network-transport-in-mainline}
+### メインラインにはネットワークトランスポートがない {#there-is-no-network-transport-in-mainline}
 
-Mainline kgdb has no Ethernet/UDP I/O backend — `kgdboc` (serial) is the only transport, confirmed by the
-complete file list for KGDB/KDB in the kernel's own `MAINTAINERS` entry (`Documentation/process/debugging/kgdb.rst`,
-`drivers/misc/kgdbts.c`, `drivers/tty/serial/kgdboc.c`, `include/linux/kdb.h`, `include/linux/kgdb.h`,
-`kernel/debug/`, `kernel/module/kdb.c` — no network driver). There's no `kgdboe=` boot parameter, no `kgdb_nmi`
-module, and no netpoll-based kgdb backend to load.
+メインラインのkgdbにはEthernet/UDPのI/Oバックエンドはなく、`kgdboc`（シリアル）が唯一のトランスポートである。これはカーネル自身の`MAINTAINERS`にあるKGDB/KDBエントリの
+ファイル一覧全体（`Documentation/process/debugging/kgdb.rst`、
+`drivers/misc/kgdbts.c`、`drivers/tty/serial/kgdboc.c`、`include/linux/kdb.h`、`include/linux/kgdb.h`、
+`kernel/debug/`、`kernel/module/kdb.c` — ネットワークドライバはない）で確認できる。`kgdboe=`ブートパラメータも、`kgdb_nmi`
+モジュールも、ロードできるnetpollベースのkgdbバックエンドも存在しない。
 
-The name isn't invented, though: `kgdboc.c`'s own header comment says it was written "based on the same
-principle as kgdboe using the NETPOLL api" — kgdboe was a real, netpoll-based kgdb-over-Ethernet design that
-existed as a precedent for kgdboc's author, but it was never merged into mainline (no commit ever added it,
-and it has no `MAINTAINERS` entry). If you need remote access to a serial-attached target, the standard
-approach is a serial-to-network bridge such as `ser2net`, external to the kernel entirely — not a kernel
-feature.
+ただし、この名前は架空のものではない。`kgdboc.c`のヘッダコメント自体に、"based on the same
+principle as kgdboe using the NETPOLL api"（NETPOLL APIを使うkgdboeと同じ原理に基づく）と書かれている。kgdboeはnetpollベースのkgdb-over-Ethernetとして実在した設計で、
+kgdbocの作者にとっての先例だったが、メインラインにマージされることはなかった（それを追加したコミットは存在せず、
+`MAINTAINERS`エントリもない）。シリアル接続されたターゲットにリモートからアクセスする必要がある場合の標準的な
+方法は、`ser2net`のようなシリアル-ネットワークブリッジを使うことであり、これはカーネルとは完全に別物で、カーネルの
+機能ではない。
 
-For serial-attached debugging, `kgdboc` is the only transport, and it's what the rest of this page covers.
+シリアル接続でのデバッグでは`kgdboc`が唯一のトランスポートであり、本ページの残りではこれを扱う。
 
-## Basic GDB commands for kernel debugging {#basic-gdb-commands-for-kernel-debugging}
+## カーネルデバッグのための基本的なGDBコマンド {#basic-gdb-commands-for-kernel-debugging}
 
-Once connected:
+接続したら:
 
 ```
-# Show kernel version info
+# カーネルバージョン情報を表示する
 (gdb) info threads
-(gdb) thread apply all bt    # backtrace all threads
+(gdb) thread apply all bt    # 全スレッドのバックトレース
 
-# Inspect current task
-(gdb) p $lx_current()        # current task_struct (requires GDB scripts)
-(gdb) lx-ps                  # list all processes (GDB script)
+# 現在のタスクを調べる
+(gdb) p $lx_current()        # 現在のtask_struct（GDBスクリプトが必要）
+(gdb) lx-ps                  # 全プロセスを一覧表示（GDBスクリプト）
 
-# Stack trace
+# スタックトレース
 (gdb) bt
-(gdb) bt full                # with local variables
+(gdb) bt full                # ローカル変数付き
 
-# Navigate frames
+# フレームの移動
 (gdb) up
 (gdb) down
 (gdb) frame 3
 
-# Inspect variables
+# 変数を調べる
 (gdb) p variable_name
 (gdb) p *ptr
 (gdb) p *(struct task_struct*)0xffff888012345678
 
-# Memory inspection
-(gdb) x/16x address          # 16 hex words
-(gdb) x/s address            # string
-(gdb) x/i address            # disassemble
+# メモリの調査
+(gdb) x/16x address          # 16個の16進ワード
+(gdb) x/s address            # 文字列
+(gdb) x/i address            # 逆アセンブル
 
-# Continue
-(gdb) c                      # continue execution
-(gdb) s                      # single step (into)
-(gdb) n                      # next (over)
-(gdb) finish                 # run until function return
+# 実行の継続
+(gdb) c                      # 実行を継続
+(gdb) s                      # ステップ実行（関数内に入る）
+(gdb) n                      # 次の行（関数をまたぐ）
+(gdb) finish                 # 関数から戻るまで実行
 ```
 
-## Breakpoints {#breakpoints}
+## ブレークポイント {#breakpoints}
 
 ```
-# Software breakpoint (INT3 on x86)
+# ソフトウェアブレークポイント（x86ではINT3）
 (gdb) break function_name
 (gdb) break kernel/sched/core.c:1234
-(gdb) break *0xffffffff81234567   # by address
+(gdb) break *0xffffffff81234567   # アドレス指定
 
-# Conditional breakpoint
+# 条件付きブレークポイント
 (gdb) break schedule if current->pid == 1234
 
-# Hardware watchpoint: break when memory is written
-(gdb) watch *address           # break on write
-(gdb) rwatch *address          # break on read
-(gdb) awatch *address          # break on read or write
+# ハードウェアウォッチポイント: メモリが書き込まれたら停止
+(gdb) watch *address           # 書き込みで停止
+(gdb) rwatch *address          # 読み出しで停止
+(gdb) awatch *address          # 読み出しまたは書き込みで停止
 
-# Example: catch when a specific inode is modified
+# 例: 特定のinodeが変更されたときに捕まえる
 (gdb) watch -l inode->i_count
 
-# List and manage breakpoints
+# ブレークポイントの一覧と管理
 (gdb) info breakpoints
 (gdb) disable 2
 (gdb) delete 2
 ```
 
-## GDB scripts for kernel {#gdb-scripts-for-kernel}
+## カーネル用GDBスクリプト {#gdb-scripts-for-kernel}
 
-The kernel ships Python-based GDB scripts (`scripts/gdb/`) that add kernel-specific commands:
+カーネルには、カーネル固有のコマンドを追加するPythonベースのGDBスクリプト（`scripts/gdb/`）が同梱されている:
 
 ```
-# Load scripts (automatic if CONFIG_GDB_SCRIPTS=y and .gdbinit configured)
+# スクリプトをロードする（CONFIG_GDB_SCRIPTS=yで.gdbinitが設定済みなら自動）
 (gdb) source /path/to/kernel/scripts/gdb/vmlinux-gdb.py
 
-# Kernel-specific commands:
-(gdb) lx-version          # kernel version string
-(gdb) lx-ps              # process list (like ps)
-(gdb) lx-dmesg           # kernel ring buffer
-(gdb) lx-lsmod           # loaded modules
-(gdb) lx-mounts          # mounted filesystems
-(gdb) lx-iomem           # /proc/iomem equivalent
-(gdb) lx-symbols         # load module symbols
+# カーネル固有のコマンド:
+(gdb) lx-version          # カーネルバージョン文字列
+(gdb) lx-ps              # プロセス一覧（psと同様）
+(gdb) lx-dmesg           # カーネルリングバッファ
+(gdb) lx-lsmod           # ロード済みモジュール
+(gdb) lx-mounts          # マウント済みファイルシステム
+(gdb) lx-iomem           # /proc/iomem相当
+(gdb) lx-symbols         # モジュールのシンボルをロード
 
-# Pretty-printers: struct task_struct, list_head, etc.
-(gdb) p $lx_per_cpu("runqueues", 0)  # runqueue of CPU 0
-(gdb) p $lx_current()               # current task
+# プリティプリンタ: struct task_struct、list_headなど
+(gdb) p $lx_per_cpu("runqueues", 0)  # CPU 0のランキュー
+(gdb) p $lx_current()               # 現在のタスク
 (gdb) $container_of(ptr, "struct task_struct", "mm")
 ```
 
-## Debugging a kernel module {#debugging-a-kernel-module}
+## カーネルモジュールのデバッグ {#debugging-a-kernel-module}
 
-Modules are loaded at runtime at unknown addresses. You must load their symbols into GDB:
+モジュールは実行時に未知のアドレスにロードされる。そのシンボルをGDBにロードしなければならない:
 
 ```bash
-# On target: find where module is loaded
+# ターゲット上で: モジュールがロードされた場所を調べる
 cat /proc/modules | grep mymodule
 # mymodule 16384 0 - Live 0xffffffffc0a00000
 
-# Or via sysfs
+# あるいはsysfs経由で
 cat /sys/module/mymodule/sections/.text
 cat /sys/module/mymodule/sections/.data
 ```
 
 ```
-# In GDB: add symbols at the reported address
+# GDB内で: 報告されたアドレスにシンボルを追加する
 (gdb) add-symbol-file mymodule.ko 0xffffffffc0a00000
 
-# Or use lx-symbols to load all modules automatically
+# あるいはlx-symbolsで全モジュールを自動的にロードする
 (gdb) lx-symbols /lib/modules/$(uname -r)/
 ```
 
-## KDB: the built-in kernel debugger {#kdb-the-built-in-kernel-debugger}
+## KDB: 組み込みのカーネルデバッガ {#kdb-the-built-in-kernel-debugger}
 
-KDB (`CONFIG_KGDB_KDB=y`) provides a simpler text-based debugger that runs entirely on the target, without needing a second machine:
+KDB（`CONFIG_KGDB_KDB=y`）は、2台目のマシンを必要とせず完全にターゲット上で動作する、よりシンプルなテキストベースのデバッガを提供する:
 
 ```bash
-# Enter KDB: press Alt+SysRq+g or trigger a panic
-# Or at a breakpoint
+# KDBに入る: Alt+SysRq+gを押すかパニックを発生させる
+# あるいはブレークポイントで
 
-# KDB prompt:
+# KDBプロンプト:
 [0]kdb> help
-[0]kdb> ps              # process list
-[0]kdb> bt              # backtrace current task
-[0]kdb> btp <pid>       # backtrace specific task
-[0]kdb> md 0xffff888012345678 16   # memory dump
-[0]kdb> mm address value           # memory modify
-[0]kdb> bp function_name           # set breakpoint
-[0]kdb> go                         # continue
-[0]kdb> dmesg                      # print ring buffer
-[0]kdb> lsmod                      # list modules
+[0]kdb> ps              # プロセス一覧
+[0]kdb> bt              # 現在のタスクのバックトレース
+[0]kdb> btp <pid>       # 特定タスクのバックトレース
+[0]kdb> md 0xffff888012345678 16   # メモリダンプ
+[0]kdb> mm address value           # メモリ変更
+[0]kdb> bp function_name           # ブレークポイントを設定
+[0]kdb> go                         # 実行を継続
+[0]kdb> dmesg                      # リングバッファを表示
+[0]kdb> lsmod                      # モジュール一覧
 ```
 
-## Common debugging scenarios {#common-debugging-scenarios}
+## よくあるデバッグシナリオ {#common-debugging-scenarios}
 
-### Debugging a kernel oops {#debugging-a-kernel-oops}
+### カーネルoopsのデバッグ {#debugging-a-kernel-oops}
 
 ```bash
-# After an oops, the system may or may not be still running
-# If still running (non-fatal oops), enter kgdb and:
-(gdb) bt           # see where we are
-(gdb) frame 5      # go to the faulting frame
-(gdb) p *ptr       # inspect the null/invalid pointer
-(gdb) list         # show source around crash point
+# oopsの後、システムがまだ動作しているかどうかは場合による
+# まだ動作していれば（致命的でないoops）、kgdbに入って:
+(gdb) bt           # 現在位置を確認
+(gdb) frame 5      # フォールトしたフレームに移動
+(gdb) p *ptr       # NULL/不正なポインタを調べる
+(gdb) list         # クラッシュ地点周辺のソースを表示
 ```
 
-### Race condition debugging {#race-condition-debugging}
+### 競合状態のデバッグ {#race-condition-debugging}
 
 ```bash
-# Breakpoint with a counter (hit on 100th call)
+# カウンタ付きブレークポイント（100回目の呼び出しで停止）
 (gdb) break kmalloc
-(gdb) ignore 1 99        # skip first 99 hits
+(gdb) ignore 1 99        # 最初の99回をスキップ
 ```
 
-### Inspecting scheduler state {#inspecting-scheduler-state}
+### スケジューラの状態を調べる {#inspecting-scheduler-state}
 
 ```bash
 (gdb) break __schedule
 (gdb) c
-# At breakpoint:
-(gdb) p *current         # current task
-(gdb) p *current->mm     # current mm_struct
-(gdb) p $lx_per_cpu("runqueues", 0)  # runqueue
+# ブレークポイントで:
+(gdb) p *current         # 現在のタスク
+(gdb) p *current->mm     # 現在のmm_struct
+(gdb) p $lx_per_cpu("runqueues", 0)  # ランキュー
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [Documentation/process/debugging/kgdb.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/process/debugging/kgdb.rst) — the canonical kgdb/kdb documentation: config options, `kgdboc` syntax, and the kdb command reference (note: this file lived at `Documentation/dev-tools/kgdb.rst` in older trees; it was relocated to `Documentation/process/debugging/`)
-- [kernel/debug/debug_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/debug/debug_core.c) — the debug core shared by both kgdb and kdb: exception entry and breakpoint handling
-- [kernel/debug/kdb/kdb_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/debug/kdb/kdb_main.c) — most of the kdb command table (`ps`, `bt`, `btp`, `go`, `dmesg`, `lsmod`, `md`, `mm`, `help`, ...)
-- [kernel/debug/kdb/kdb_bp.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/debug/kdb/kdb_bp.c) — the `bp`/`bph` breakpoint commands, registered separately from `kdb_main.c`'s table
-- [drivers/tty/serial/kgdboc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/kgdboc.c) — the `kgdboc` I/O driver that binds kgdb to a serial console
-- [scripts/gdb/vmlinux-gdb.py](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/gdb/vmlinux-gdb.py) — entry point that loads the `lx-*` GDB helper commands (`lx-ps`, `lx-dmesg`, `lx-lsmod`, `lx-symbols`, ...) and convenience functions (`$lx_current()`, `$lx_per_cpu()`, `$container_of()`) from `scripts/gdb/linux/`
+- [Documentation/process/debugging/kgdb.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/process/debugging/kgdb.rst) — kgdb/kdbの正式なドキュメント: 設定オプション、`kgdboc`の構文、kdbコマンドリファレンス（注: このファイルは古いツリーでは`Documentation/dev-tools/kgdb.rst`にあり、`Documentation/process/debugging/`に移動された）
+- [kernel/debug/debug_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/debug/debug_core.c) — kgdbとkdbの両方が共有するデバッグコア: 例外への突入とブレークポイントの処理
+- [kernel/debug/kdb/kdb_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/debug/kdb/kdb_main.c) — kdbコマンドテーブルの大部分（`ps`、`bt`、`btp`、`go`、`dmesg`、`lsmod`、`md`、`mm`、`help`、...）
+- [kernel/debug/kdb/kdb_bp.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/debug/kdb/kdb_bp.c) — `kdb_main.c`のテーブルとは別に登録される`bp`/`bph`ブレークポイントコマンド
+- [drivers/tty/serial/kgdboc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/kgdboc.c) — kgdbをシリアルコンソールに結び付ける`kgdboc` I/Oドライバ
+- [scripts/gdb/vmlinux-gdb.py](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/gdb/vmlinux-gdb.py) — `scripts/gdb/linux/`から`lx-*` GDBヘルパーコマンド（`lx-ps`、`lx-dmesg`、`lx-lsmod`、`lx-symbols`、...）と便利関数（`$lx_current()`、`$lx_per_cpu()`、`$container_of()`）をロードするエントリポイント
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [kdump and crash](kdump.md) — post-mortem crash analysis
-- [Oops analysis](oops-analysis.md) — decoding oops without a debugger
-- [Kernel Modules](../modules/module-basics.md) — loading module debug symbols
-- [Tracing: ftrace](../tracing/ftrace.md) — lighter-weight alternative to breakpoints
+- [kdumpとcrash](kdump.md) — 事後のクラッシュ解析
+- [Oops解析](oops-analysis.md) — デバッガなしでoopsをデコードする
+- [カーネルモジュール](../modules/module-basics.md) — モジュールのデバッグシンボルのロード
+- [トレーシング: ftrace](../tracing/ftrace.md) — ブレークポイントより軽量な代替手段
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Bringing kgdb into 2.6](https://lwn.net/Articles/70465/) (2004) — the early, contested push to get kgdb merged, over Linus Torvalds's historical resistance to in-tree debuggers
-- [Merging kdb and kgdb](https://lwn.net/Articles/374633/) (2010) — Jason Wessel's work to unify the kdb shell and kgdb's gdb-remote stub around a common debug core, extending kdb beyond x86
+- [Bringing kgdb into 2.6](https://lwn.net/Articles/70465/)（2004） — ツリー内デバッガに対するLinus Torvaldsの歴史的な抵抗を押して、kgdbをマージさせようとした初期の議論を呼んだ取り組み
+- [Merging kdb and kgdb](https://lwn.net/Articles/374633/)（2010） — kdbシェルとkgdbのgdbリモートスタブを共通のデバッグコアのもとに統合し、kdbをx86以外にも拡張したJason Wesselの作業
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Using kgdb, kdb and the kernel debugger internals](https://docs.kernel.org/process/debugging/kgdb.html) — docs.kernel.org rendering of the canonical documentation
-- [GDB kernel debugging](https://docs.kernel.org/process/debugging/gdb-kernel-debugging.html) — docs.kernel.org page on the `scripts/gdb/` Python helpers and convenience functions
+- [Using kgdb, kdb and the kernel debugger internals](https://docs.kernel.org/process/debugging/kgdb.html) — 正式なドキュメントのdocs.kernel.org版
+- [GDB kernel debugging](https://docs.kernel.org/process/debugging/gdb-kernel-debugging.html) — `scripts/gdb/`のPythonヘルパーと便利関数に関するdocs.kernel.orgのページ

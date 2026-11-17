@@ -1,8 +1,8 @@
-# Kernel Debugging {#kernel-debugging}
+# カーネルデバッグ {#kernel-debugging}
 
-> Tools and techniques for debugging the Linux kernel
+> Linuxカーネルをデバッグするためのツールと手法
 
-## Debugging approaches {#debugging-approaches}
+## デバッグのアプローチ {#debugging-approaches}
 
 ```
 Problem type                  Best tool
@@ -17,39 +17,39 @@ Logic bugs in drivers           dynamic debug, pr_debug
 Boot failures                   early_printk, earlyprintk=ttyS0
 ```
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [KGDB](kgdb.md) | Live kernel debugging with GDB over serial or network |
-| [kdump and crash](kdump.md) | Capturing and analyzing kernel crash dumps |
-| [Oops analysis](oops-analysis.md) | Reading oops output, addr2line, decode_stacktrace |
-| [KCSAN](kcsan.md) | Data race detection using watchpoints and the Linux Kernel Memory Model |
-| [syzkaller](syzkaller.md) | Automated syscall fuzzing, syzbot, and reproducer workflow |
-| [KASAN and KFENCE](kasan-kfence.md) | Memory error detection: out-of-bounds, use-after-free, shadow memory |
-| [lockdep in Practice](dynamic-debug-lockdep.md) | Reading splats, annotating false positives, contention stats |
-| [War Stories](war-stories.md) | Bugs caught by KASAN, lockdep, syzkaller, kdump, and KFENCE |
+| [KGDB](kgdb.md) | シリアルまたはネットワーク経由のGDBによる稼働中カーネルのデバッグ |
+| [kdumpとcrash](kdump.md) | カーネルクラッシュダンプの取得と解析 |
+| [Oops解析](oops-analysis.md) | oops出力の読み方、addr2line、decode_stacktrace |
+| [KCSAN](kcsan.md) | ウォッチポイントとLinux Kernel Memory Modelを用いたデータ競合検出 |
+| [syzkaller](syzkaller.md) | 自動システムコールファジング、syzbot、再現プログラムのワークフロー |
+| [KASANとKFENCE](kasan-kfence.md) | メモリエラー検出: 境界外アクセス、use-after-free、シャドウメモリ |
+| [lockdepの実践](dynamic-debug-lockdep.md) | splatの読み方、誤検知へのアノテーション、競合統計 |
+| [事件簿](war-stories.md) | KASAN、lockdep、syzkaller、kdump、KFENCEが捕まえたバグ |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# Trigger an oops on demand (testing)
+# 必要に応じてoopsを発生させる（テスト用）
 echo c > /proc/sysrq-trigger
 
-# Enable SysRq
+# SysRqを有効化する
 echo 1 > /proc/sys/kernel/sysrq
 
-# Common SysRq keys:
-# Alt+SysRq+t: dump all tasks
-# Alt+SysRq+m: memory info
-# Alt+SysRq+l: backtrace all CPUs
-# Alt+SysRq+b: reboot
-# Alt+SysRq+c: crash (for kdump testing)
+# よく使うSysRqキー:
+# Alt+SysRq+t: 全タスクをダンプ
+# Alt+SysRq+m: メモリ情報
+# Alt+SysRq+l: 全CPUのバックトレース
+# Alt+SysRq+b: 再起動
+# Alt+SysRq+c: クラッシュ（kdumpのテスト用）
 
-# Panic on oops (useful for kdump testing)
+# oops時にパニックさせる（kdumpのテストに便利）
 echo 1 > /proc/sys/kernel/panic_on_oops
-echo 5 > /proc/sys/kernel/panic          # reboot 5s after panic
+echo 5 > /proc/sys/kernel/panic          # パニックの5秒後に再起動
 
-# kernel.org decode
+# kernel.orgのデコード
 ./scripts/decode_stacktrace.sh vmlinux < oops.txt
 ```

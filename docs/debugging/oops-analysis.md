@@ -1,12 +1,12 @@
-# Kernel Oops Analysis {#kernel-oops-analysis}
+# カーネルOops解析 {#kernel-oops-analysis}
 
-> Reading oops output, decoding addresses, and finding the bug
+> oops出力を読み、アドレスをデコードし、バグを見つける
 
-## What is a kernel oops? {#what-is-a-kernel-oops}
+## カーネルoopsとは {#what-is-a-kernel-oops}
 
-A **kernel oops** is a non-fatal kernel error — the kernel detected an inconsistency (usually a NULL pointer dereference, bad memory access, or BUG()) but can keep running (though the offending task is killed). A **kernel panic** is a fatal oops or a situation where the kernel cannot safely continue.
+**カーネルoops**は致命的ではないカーネルエラーである。カーネルが不整合（通常はNULLポインタ参照外し、不正なメモリアクセス、またはBUG()）を検出したが、（問題を起こしたタスクはkillされるものの）動作を継続できる状態を指す。**カーネルパニック**は致命的なoops、またはカーネルが安全に継続できない状況である。
 
-## Anatomy of an oops message {#anatomy-of-an-oops-message}
+## oopsメッセージの構造 {#anatomy-of-an-oops-message}
 
 ```
 [  123.456789] BUG: kernel NULL pointer dereference, address: 0000000000000018
@@ -16,18 +16,18 @@ A **kernel oops** is a non-fatal kernel error — the kernel detected an inconsi
 [  123.456793] Oops: Oops: 0000 [#1] SMP NOPTI
 ```
 
-The doubled "Oops: Oops:" is real, not a typo: `__die_header()` (`arch/x86/kernel/dumpstack.c`) always prints `"Oops: %s: ..."`, and the generic kernel-mode page-fault handler (`arch/x86/mm/fault.c`) passes the literal string `"Oops"` as that `%s` — so the two collide. The flags after `[#1]` are conditional, built from the running kernel's config: `SMP` (`CONFIG_SMP`), `DEBUG_PAGEALLOC` (if `debug_pagealloc_enabled()`), `KASAN` (`CONFIG_KASAN`), and `PTI`/`NOPTI` (`CONFIG_MITIGATION_PAGE_TABLE_ISOLATION`, `PTI` if the CPU needs the mitigation, `NOPTI` if not) — there is no `PREEMPT` flag in this line at all.
+「Oops: Oops:」の重複は実際の出力であり、誤植ではない。`__die_header()`（`arch/x86/kernel/dumpstack.c`）は常に`"Oops: %s: ..."`を出力し、汎用のカーネルモードページフォールトハンドラ（`arch/x86/mm/fault.c`）はその`%s`としてリテラル文字列`"Oops"`を渡すため、両者が重なるのである。`[#1]`の後のフラグは条件付きで、実行中のカーネルの設定から組み立てられる: `SMP`（`CONFIG_SMP`）、`DEBUG_PAGEALLOC`（`debug_pagealloc_enabled()`の場合）、`KASAN`（`CONFIG_KASAN`）、そして`PTI`/`NOPTI`（`CONFIG_MITIGATION_PAGE_TABLE_ISOLATION`。CPUがその緩和策を必要とする場合は`PTI`、そうでなければ`NOPTI`）である。この行に`PREEMPT`フラグは一切ない。
 
-Breaking down the first line:
+1行目を分解すると:
 
-- `BUG: kernel NULL pointer dereference` — the fault type
-- `address: 0x18` — the virtual address that caused the fault (0x18 = offset 24 in a struct)
+- `BUG: kernel NULL pointer dereference` — フォールトの種類
+- `address: 0x18` — フォールトを引き起こした仮想アドレス（0x18 = 構造体内のオフセット24）
 
-The error code `0000`:
+エラーコード`0000`:
 
-- Bit 0 = 0: page not present (vs protection fault)
-- Bit 1 = 0: read (vs write)
-- Bit 2 = 0: kernel mode (vs user mode)
+- ビット0 = 0: ページが存在しない（保護違反ではない）
+- ビット1 = 0: 読み出し（書き込みではない）
+- ビット2 = 0: カーネルモード（ユーザーモードではない）
 
 ```
 [  123.456794] CPU: 3 PID: 1234 Comm: myapp Tainted: G  --------- -  5.19.0 #1
@@ -35,31 +35,31 @@ The error code `0000`:
 [  123.456796] RIP: 0010:mydriver_write+0x34/0xb0 [mydriver]
 ```
 
-- `CPU: 3` — which CPU was running
-- `PID: 1234 Comm: myapp` — the task that triggered the oops
-- `Tainted: G` — kernel taint flags (G = all loaded modules are GPL-compatible, no proprietary modules)
-- `RIP: 0010:` — instruction pointer, `0010` = kernel code segment
-- `mydriver_write+0x34/0xb0` — function + offset / function size
+- `CPU: 3` — 実行していたCPU
+- `PID: 1234 Comm: myapp` — oopsを引き起こしたタスク
+- `Tainted: G` — カーネルのtaintフラグ（G = ロード済みモジュールがすべてGPL互換で、プロプライエタリなモジュールがない）
+- `RIP: 0010:` — 命令ポインタ。`0010` = カーネルのコードセグメント
+- `mydriver_write+0x34/0xb0` — 関数 + オフセット / 関数のサイズ
 
-### Taint flags {#taint-flags}
+### taintフラグ {#taint-flags}
 
 ```
-G — all loaded modules are GPL-compatible (no proprietary modules)
-P — proprietary (non-GPL) module loaded
-F — forced module load (bad signature or version mismatch)
-S — kernel running on a CPU/system out of specification
-M — machine check exception
-B — bad page
-U — user (userspace explicitly loaded)
-D — died (OOPS has been recorded, tainted from now on)
-A — ACPI table overridden
-W — warning (taint on WARN())
-C — staging driver loaded
-I — workaround for a bug in platform firmware applied
-K — live patched
+G — ロード済みモジュールがすべてGPL互換（プロプライエタリなモジュールなし）
+P — プロプライエタリ（非GPL）モジュールがロードされた
+F — モジュールが強制ロードされた（不正な署名またはバージョン不一致）
+S — 仕様外のCPU/システムでカーネルが動作している
+M — マシンチェック例外
+B — 不良ページ
+U — ユーザー（ユーザー空間が明示的に設定した）
+D — died（OOPSが記録された。以後taint状態となる）
+A — ACPIテーブルが上書きされた
+W — 警告（WARN()でtaintする）
+C — stagingドライバがロードされた
+I — プラットフォームファームウェアのバグに対する回避策が適用された
+K — ライブパッチが適用された
 ```
 
-## Register dump {#register-dump}
+## レジスタダンプ {#register-dump}
 
 ```
 [  123.456797] RSP: 0018:ffffc900012c7d28 EFLAGS: 00010246
@@ -73,16 +73,16 @@ K — live patched
 [  123.456805] CR2: 0000000000000018 CR3: 000000010a234000 CR4: 00000000003506e0
 ```
 
-Key registers for diagnosis:
+診断の鍵となるレジスタ:
 
-- `RIP` — where the crash happened
-- `CR2` — the faulting address (for page faults)
-- `RAX = 0` — often the NULL pointer that was dereferenced
-- `RBX`, `R12-15` — often hold struct pointers; can reveal the data structure
+- `RIP` — クラッシュが起きた場所
+- `CR2` — フォールトしたアドレス（ページフォールトの場合）
+- `RAX = 0` — 参照外しされたNULLポインタであることが多い
+- `RBX`、`R12-15` — 構造体ポインタを保持していることが多く、データ構造の手がかりになる
 
-**The offset trick**: `CR2 = 0x18 = 24`. A struct member at offset 24 from a NULL pointer. Count struct fields to identify which member was accessed.
+**オフセットのトリック**: `CR2 = 0x18 = 24`。NULLポインタからオフセット24にある構造体メンバである。構造体のフィールドを数えれば、どのメンバにアクセスしたかを特定できる。
 
-## Stack trace {#stack-trace}
+## スタックトレース {#stack-trace}
 
 ```
 [  123.456806] Call Trace:
@@ -96,67 +96,67 @@ Key registers for diagnosis:
 [  123.456814]  </TASK>
 ```
 
-Read from top (most recent) to bottom (oldest call). The crash happened in `mydriver_write` at offset `0x34` within the function.
+上（最も新しい）から下（最も古い呼び出し）へと読む。クラッシュは`mydriver_write`内のオフセット`0x34`で起きた。
 
-## addr2line: finding the source line {#addr2line-finding-the-source-line}
+## addr2line: ソース行を見つける {#addr2line-finding-the-source-line}
 
-Given the faulting address, find the exact source line:
+フォールトしたアドレスから、正確なソース行を見つける:
 
 ```bash
-# Method 1: addr2line with vmlinux
+# 方法1: vmlinuxに対してaddr2lineを使う
 addr2line -e /usr/lib/debug/vmlinux ffffffff81234567
 # /build/linux/drivers/mydriver/mydriver.c:245
 
-# With function name:
+# 関数名付きで:
 addr2line -e vmlinux -f ffffffff81234567
 # mydriver_write
 # /build/linux/drivers/mydriver/mydriver.c:245
 
-# Method 2: for a module (needs unstripped .ko)
-addr2line -e mydriver.ko 0x34   # offset within the module
+# 方法2: モジュールの場合（stripされていない.koが必要）
+addr2line -e mydriver.ko 0x34   # モジュール内のオフセット
 # /path/to/mydriver.c:245
 ```
 
 ## decode_stacktrace.sh {#decode_stacktracesh}
 
-The kernel ships a script that resolves all addresses in a stack trace:
+カーネルには、スタックトレース中のすべてのアドレスを解決するスクリプトが同梱されている:
 
 ```bash
-# Pipe the oops through decode_stacktrace
+# oopsをdecode_stacktraceにパイプで渡す
 ./scripts/decode_stacktrace.sh /path/to/vmlinux /path/to/kernel/source < oops.txt
 
-# Or with modules:
+# モジュールも含める場合:
 ./scripts/decode_stacktrace.sh vmlinux . mydriver.ko < oops.txt
 ```
 
-Output resolves each `function+0xNN/0xNN` to `function (file.c:line)`.
+出力では各`function+0xNN/0xNN`が`function (file.c:line)`に解決される。
 
-## objdump: disassembling around the crash {#objdump-disassembling-around-the-crash}
+## objdump: クラッシュ周辺の逆アセンブル {#objdump-disassembling-around-the-crash}
 
 ```bash
-# Disassemble the function that crashed
+# クラッシュした関数を逆アセンブルする
 objdump -d --start-address=0xffffffff81234500 --stop-address=0xffffffff81234600 vmlinux
 
-# For a module:
+# モジュールの場合:
 objdump -d mydriver.ko | grep -A 30 "<mydriver_write>"
 ```
 
-The crash was at offset `0x34` in `mydriver_write`:
+クラッシュは`mydriver_write`のオフセット`0x34`で起きた:
 
 ```
 0000000000000000 <mydriver_write>:
    0: push %rbp
    1: mov %rsp,%rbp
   ...
-  34: mov 0x18(%rax),%rdx    ← crash here: rax was NULL, accessing offset 0x18
+  34: mov 0x18(%rax),%rdx    ← ここでクラッシュ: raxがNULLで、オフセット0x18にアクセスした
   38: test %rdx,%rdx
 ```
 
-This tells us: `%rax` was NULL, and the code tried to read member at offset 0x18 from it.
+ここから、`%rax`がNULLで、コードがそこからオフセット0x18のメンバを読もうとしたことがわかる。
 
-## Common oops patterns {#common-oops-patterns}
+## よくあるoopsのパターン {#common-oops-patterns}
 
-### NULL pointer dereference {#null-pointer-dereference}
+### NULLポインタ参照外し {#null-pointer-dereference}
 
 ```
 BUG: kernel NULL pointer dereference, address: 0000000000000018
@@ -164,20 +164,20 @@ RIP: mydriver_write+0x34/0xb0
 RAX: 0000000000000000
 ```
 
-Diagnosis: `RAX = 0` (the NULL pointer). Offset `0x18` tells you which field. Look at the struct at that offset.
+診断: `RAX = 0`（NULLポインタ）。オフセット`0x18`からどのフィールドかがわかる。そのオフセットにある構造体のメンバを確認する。
 
 ```c
-/* If the struct is: */
+/* 構造体が次のようなものだとすると: */
 struct mydev {
-    spinlock_t lock;      /* offset 0 */
-    void *private;        /* offset 8 */
-    struct device *dev;   /* offset 16 = 0x10 */
-    int refcount;         /* offset 24 = 0x18 ← this field */
+    spinlock_t lock;      /* オフセット0 */
+    void *private;        /* オフセット8 */
+    struct device *dev;   /* オフセット16 = 0x10 */
+    int refcount;         /* オフセット24 = 0x18 ← このフィールド */
 };
-/* Reading offset 0x18 = reading mydev->refcount from a NULL mydev* */
+/* オフセット0x18の読み出し = NULLのmydev*からmydev->refcountを読むこと */
 ```
 
-### Use-after-free {#use-after-free}
+### use-after-free {#use-after-free}
 
 ```
 BUG: KASAN: slab-use-after-free in mydriver_read+0x45/0x100
@@ -190,20 +190,20 @@ Allocated by task 1234:
   mydriver_probe+0x...
 ```
 
-KASAN shows exactly where the memory was allocated and freed — invaluable for race conditions.
+KASANはメモリがどこで割り当てられ、どこで解放されたかを正確に示す。競合状態の調査では非常に貴重である。
 
-### Stack overflow {#stack-overflow}
+### スタックオーバーフロー {#stack-overflow}
 
-With `CONFIG_VMAP_STACK` (the default), kernel stacks are allocated with an unmapped guard page on either side, so overrunning one faults immediately instead of silently corrupting whatever memory follows it. `handle_stack_overflow()` (`arch/x86/kernel/traps.c`) catches that fault and reports it, then calls `die("stack guard page", regs, 0)` to produce a normal oops:
+`CONFIG_VMAP_STACK`（デフォルト）では、カーネルスタックは両側にマップされていないガードページを置いて割り当てられるため、スタックをはみ出すと、後続のメモリを黙って破壊するのではなく即座にフォールトする。`handle_stack_overflow()`（`arch/x86/kernel/traps.c`）がそのフォールトを捕まえて報告し、続いて`die("stack guard page", regs, 0)`を呼んで通常のoopsを出力する:
 
 ```
 BUG: IRQ stack guard page was hit at ffffc900012c8000 (stack is ffffc900012c4000..ffffc900012c8000)
 Oops: stack guard page: 0000 [#1] SMP NOPTI
 ```
 
-The stack type ("IRQ", "task", ...) comes from `stack_type_name()`; a task stack overflow reads "task stack guard page was hit" instead. Kernel stacks are typically 8-16KB. Deep recursion (e.g., deep VFS recursion with overlayfs) can overflow them.
+スタックの種類（「IRQ」、「task」、...）は`stack_type_name()`から得られる。タスクスタックのオーバーフローなら代わりに「task stack guard page was hit」と表示される。カーネルスタックは通常8〜16KBである。深い再帰（例: overlayfsでの深いVFS再帰）はこれをオーバーフローさせうる。
 
-### Soft lockup {#soft-lockup}
+### ソフトロックアップ {#soft-lockup}
 
 ```
 watchdog: BUG: soft lockup - CPU#3 stuck for 22s! [kworker/3:1:5678]
@@ -214,9 +214,9 @@ Call Trace:
   do_something_slow+0x123/0x456
 ```
 
-The CPU hasn't scheduled in 20+ seconds. Usually: holding a spinlock too long, or a tight loop without `cond_resched()`.
+CPUが20秒以上スケジュールしていない。原因は通常、spinlockを長く保持しすぎているか、`cond_resched()`のないタイトなループである。
 
-### RCU stall {#rcu-stall}
+### RCUストール {#rcu-stall}
 
 ```
 rcu: INFO: rcu_sched self-detected stall on CPU
@@ -224,36 +224,36 @@ rcu:    2-O.N.: (1 GPs behind) idle=... softirq=100/205 fqs=0
 rcu:     (t=21012 jiffies g=4989 q=157 ncpus=4)
 ```
 
-An RCU read-side critical section has been held for too long, or the RCU grace period is stalled. Often caused by holding a lock while preemption is disabled for an extended time.
+RCUの読み取り側クリティカルセクションが長く保持されすぎているか、RCUのグレースピリオドが停滞している。プリエンプションを無効にしたまま長時間ロックを保持していることが原因であることが多い。
 
-## BUG() and WARN() {#bug-and-warn}
+## BUG()とWARN() {#bug-and-warn}
 
 ```c
-/* In kernel code: force an oops at a specific point */
-BUG();                      /* always: oops + stack trace */
-BUG_ON(condition);          /* conditional */
+/* カーネルコード内: 特定の箇所で強制的にoopsさせる */
+BUG();                      /* 常に: oops + スタックトレース */
+BUG_ON(condition);          /* 条件付き */
 
-WARN();                     /* log + stack trace, but continue */
+WARN();                     /* ログ + スタックトレースを出すが、実行は継続 */
 WARN_ON(condition);
-WARN_ON_ONCE(condition);    /* print only once */
+WARN_ON_ONCE(condition);    /* 1回だけ出力 */
 WARN_ONCE(condition, fmt);
 ```
 
-`WARN` is useful for detecting unexpected conditions without crashing the system. Check `dmesg` for `WARNING:` lines even if the system seems fine.
+`WARN`は、システムをクラッシュさせずに予期しない状態を検出するのに役立つ。システムが正常に見えても、`dmesg`に`WARNING:`行がないか確認するとよい。
 
-## netconsole: capture oops over the network {#netconsole-capture-oops-over-the-network}
+## netconsole: ネットワーク経由でoopsを取得する {#netconsole-capture-oops-over-the-network}
 
-For headless servers where you can't see the serial console:
+シリアルコンソールを見られないヘッドレスサーバー向け:
 
 ```bash
-# Load netconsole (or configure as module)
+# netconsoleをロードする（またはモジュールとして設定する）
 modprobe netconsole netconsole=@192.168.1.10/eth0,@192.168.1.1/00:11:22:33:44:55
-# Format: @src_ip/src_dev,@dst_ip/dst_mac
+# 書式: @src_ip/src_dev,@dst_ip/dst_mac
 
-# On the receiving machine:
-nc -ulp 6665   # listen on default netconsole port
+# 受信側のマシンで:
+nc -ulp 6665   # netconsoleのデフォルトポートで待ち受ける
 
-# Or with dynamic netconsole (uses configfs):
+# あるいは動的netconsoleで（configfsを使う）:
 mkdir /sys/kernel/config/netconsole/target1
 echo eth0              > /sys/kernel/config/netconsole/target1/dev_name
 echo 192.168.1.10     > /sys/kernel/config/netconsole/target1/local_ip
@@ -262,29 +262,29 @@ echo 00:11:22:33:44:55 > /sys/kernel/config/netconsole/target1/remote_mac
 echo 1                > /sys/kernel/config/netconsole/target1/enabled
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [arch/x86/include/asm/trap_pf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/trap_pf.h) — the `X86_PF_*` bit definitions behind the page-fault `error_code` breakdown (bit 0 = not-present/protection, bit 1 = read/write, bit 2 = kernel/user)
-- [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — the `taint_flags[]` table: the authoritative letter-to-flag mapping behind the `Tainted:` line (see [tainted-kernels.rst](https://docs.kernel.org/admin-guide/tainted-kernels.html), cited below, for the human-readable meaning of each flag)
-- [scripts/decode_stacktrace.sh](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/decode_stacktrace.sh) — resolves `function+0xNN/0xNN` entries in a captured oops to `function (file.c:line)`
-- [Documentation/networking/netconsole.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/networking/netconsole.rst) — the `netconsole=` module parameter format and the configfs-based dynamic reconfiguration interface (`dev_name`, `local_ip`, `remote_ip`, `remote_mac`, `enabled`, ...)
+- [arch/x86/include/asm/trap_pf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/trap_pf.h) — ページフォールトの`error_code`の内訳（ビット0 = 不在/保護違反、ビット1 = 読み出し/書き込み、ビット2 = カーネル/ユーザー）の元になる`X86_PF_*`ビット定義
+- [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — `taint_flags[]`テーブル: `Tainted:`行の文字とフラグの対応の正典（各フラグの人間向けの意味は、下で挙げる[tainted-kernels.rst](https://docs.kernel.org/admin-guide/tainted-kernels.html)を参照）
+- [scripts/decode_stacktrace.sh](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/decode_stacktrace.sh) — 取得したoops中の`function+0xNN/0xNN`エントリを`function (file.c:line)`に解決する
+- [Documentation/networking/netconsole.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/networking/netconsole.rst) — `netconsole=`モジュールパラメータの書式と、configfsベースの動的再設定インターフェース（`dev_name`、`local_ip`、`remote_ip`、`remote_mac`、`enabled`、...）
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`addr2line(1)`](https://man7.org/linux/man-pages/man1/addr2line.1.html) — converts addresses (or `function+offset`) into file names and line numbers
-- [`objdump(1)`](https://man7.org/linux/man-pages/man1/objdump.1.html) — disassembles object files; used here with `--start-address`/`--stop-address` to inspect the faulting instruction
+- [`addr2line(1)`](https://man7.org/linux/man-pages/man1/addr2line.1.html) — アドレス（または`function+offset`）をファイル名と行番号に変換する
+- [`objdump(1)`](https://man7.org/linux/man-pages/man1/objdump.1.html) — オブジェクトファイルを逆アセンブルする。ここではフォールトした命令を調べるために`--start-address`/`--stop-address`とともに使った
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Kernel Panic and Oops](../kernel/panic-oops.md) — the kernel-side code path: `die()`, `oops_begin()`/`oops_end()`, ORC unwinding, and `panic()`
-- [kdump and crash](kdump.md) — automated crash dump collection
-- [KGDB](kgdb.md) — live kernel debugging
-- [Memory Management: KASAN](../mm/kasan.md) — memory error detection
-- [Memory Management: KFENCE](../mm/kfence.md) — lightweight production memory checking
-- [Tracing: kprobes](../tracing/kprobes-tracepoints.md) — probing without crashing
+- [カーネルパニックとOops](../kernel/panic-oops.md) — カーネル側のコードパス: `die()`、`oops_begin()`/`oops_end()`、ORCアンワインド、`panic()`
+- [kdumpとcrash](kdump.md) — 自動的なクラッシュダンプ収集
+- [KGDB](kgdb.md) — 稼働中カーネルのデバッグ
+- [メモリ管理: KASAN](../mm/kasan.md) — メモリエラー検出
+- [メモリ管理: KFENCE](../mm/kfence.md) — 本番環境向けの軽量なメモリチェック
+- [トレーシング: kprobe](../tracing/kprobes-tracepoints.md) — クラッシュさせずにプローブする
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — full taint flag reference with official descriptions for every letter
+- [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — すべての文字について公式の説明を記載した、taintフラグの完全なリファレンス
