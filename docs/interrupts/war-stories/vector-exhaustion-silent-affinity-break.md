@@ -1,51 +1,51 @@
-# The Warning That Vector Space Was Silently Breaking Affinity {#the-warning-that-vector-space-was-silently-breaking-affinity}
+# ベクタ空間が黙ってアフィニティを壊していたことを示す警告 {#the-warning-that-vector-space-was-silently-breaking-affinity}
 
-> An administrator activates an interrupt whose CPU affinity was reserved when the CPUs it wanted have since run out of vectors, the kernel silently widens the affinity to make it work, and for about two years there was no way to find out from the syslog that it had happened
+> 管理者が、CPUアフィニティを予約済みの割り込みを有効化する。ところが希望していたCPUはその後ベクタを使い果たしていたため、カーネルは動作させるために黙ってアフィニティを広げる。そして約2年間、それが起きたことをsyslogから知る方法はなかった
 
-Landed
-:   Linux 5.4 (November 2019) · fix authored August 22, 2019
+収録
+:   Linux 5.4（2019年11月）· 修正の作成は2019年8月22日
 
-Authors
-:   Neil Horman (fix); reported and tested by a Red Hat-affiliated reporter (`djuran@redhat.com`, per the commit's `Reported-by`/`Tested-by` tags)
+作者
+:   Neil Horman（修正）。Red Hat関係の報告者が報告・テスト（コミットの `Reported-by`/`Tested-by` タグによれば `djuran@redhat.com`）
 
-Not a CVE
+CVEではない
 
-*Part of [War Stories: Interrupt and IRQ-Affinity Bugs](../war-stories.md).*
+*[事件簿: 割り込みとIRQアフィニティのバグ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-Each x86 CPU has 256 interrupt vectors total, and most of them aren't available for devices: 32 are reserved by the architecture for CPU exceptions and traps, and the kernel itself reserves another 22 for internal purposes like IPIs and the local APIC timer. That leaves 202 vectors per CPU that can actually be assigned to device interrupts. When an interrupt is set up, or its affinity is changed by the kernel or an administrator, the vector-assignment code tries to honor the requested affinity mask by allocating a free vector on one of the CPUs in that mask.
+x86の各CPUには合計256個の割り込みベクタがあるが、その大半はデバイスには使えない。32個はCPUの例外とトラップのためにアーキテクチャが予約しており、さらに22個をカーネル自身がIPIやローカルAPICタイマーなどの内部用途に予約している。残る202個が、CPUごとにデバイス割り込みへ実際に割り当てられるベクタである。割り込みがセットアップされるとき、あるいはカーネルや管理者がそのアフィニティを変更するとき、ベクタ割り当てコードは要求されたアフィニティマスク内のいずれかのCPU上で空きベクタを割り当てることで、そのマスクを尊重しようとする。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-On a system with many high-interrupt-count devices — multi-queue NICs and storage controllers on a large-core-count machine are the common case — it's entirely possible for every CPU in a requested affinity mask to already have all 202 of its assignable vectors in use. This specific failure mode lives in `activate_reserved()`, the function that finalizes a vector assignment for an interrupt whose affinity had been *reserved* rather than assigned immediately — a path introduced in the September 2017 x86 vector-management rework (Linux 4.15). When activation finds every CPU in the reserved mask out of vectors, `assign_irq_vector_any_locked()` doesn't fail the request. It falls back silently to a wider set of CPUs outside the one that had been reserved, and assigns the interrupt there instead. (Before that rework, the older vector-assignment code returned `-ENOSPC` in the equivalent situation rather than silently widening the mask.)
+割り込み数の多いデバイスを多数抱えるシステム（コア数の多いマシン上のマルチキューNICやストレージコントローラがよくある例）では、要求されたアフィニティマスク内のすべてのCPUが、割り当て可能な202個のベクタをすでにすべて使っていることも十分にありうる。この特定の障害モードは `activate_reserved()` にある。これは、アフィニティが即座に割り当てられるのではなく*予約*されていた割り込みについて、ベクタ割り当てを確定させる関数であり、2017年9月のx86ベクタ管理の再設計（Linux 4.15）で導入されたパスである。有効化の際に予約マスク内のすべてのCPUでベクタが尽きていると判明した場合、`assign_irq_vector_any_locked()` はリクエストを失敗させない。予約されていたものより外側の、より広いCPU集合へ黙ってフォールバックし、代わりにそこへ割り込みを割り当てる。（この再設計以前の古いベクタ割り当てコードは、同等の状況で黙ってマスクを広げるのではなく `-ENOSPC` を返していた。）
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The actual, in-effect affinity was readable from `/proc/irq/$N/effective_affinity` — a file added in Linux 4.13, about two years before this fix — but nothing wrote to the kernel log when the fallback happened, so there was no indication that a reserved affinity had silently widened. For an interrupt that's already active, writing a new affinity through `/proc/irq/$N/smp_affinity` fails visibly with `-ENOSPC` if the allocator can't honor it — the silent case is specifically the *reservation-mode* activation path. An administrator pinning interrupts for a latency-sensitive or NUMA-aware workload would activate the device, see no error, and have no reason to go check `effective_affinity` against what they'd asked for — until performance on the "pinned" workload didn't match expectations, at which point tracking the mismatch back to vector exhaustion elsewhere in the system required already suspecting this specific failure mode. The fix's own `Reported-by`/`Tested-by` tags credit a real reporter who hit this and verified the fix, though the changelog doesn't spell out their exact workload.
+実際に有効なアフィニティは `/proc/irq/$N/effective_affinity` から読めた。これはこの修正の約2年前、Linux 4.13で追加されたファイルである。しかしフォールバックが起きてもカーネルログには何も書かれなかったため、予約されたアフィニティが黙って広げられたことを示すものは何もなかった。すでにアクティブな割り込みについては、アロケータが尊重できない場合、`/proc/irq/$N/smp_affinity` を通じた新しいアフィニティの書き込みは `-ENOSPC` で目に見える形で失敗する。黙って起こるのは、特に*予約モード*の有効化パスの場合である。レイテンシに敏感なワークロードやNUMAを意識したワークロードのために割り込みを固定している管理者は、デバイスを有効化してもエラーを目にせず、`effective_affinity` を自分が要求したものと照合しに行く理由もなかった。「固定した」ワークロードの性能が期待どおりにならなくなって初めて気づくが、その時点でその不一致をシステムの別の場所でのベクタ枯渇まで追跡するには、すでにこの特定の障害モードを疑っている必要があった。修正の `Reported-by`/`Tested-by` タグは、これに遭遇し修正を検証した実在の報告者の功績を記しているが、変更履歴には彼らの正確なワークロードは書かれていない。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-This isn't a bug in the sense of incorrect behavior — the fallback itself is arguably the right thing to do, since refusing to deliver the interrupt at all would be worse than delivering it on a CPU outside the requested set. The gap was purely observability: a code path can be functioning exactly as designed and still leave an administrator with no way to learn that the system quietly overrode their explicit request. Whether that counts as a bug or a missing feature is a matter of framing, but from the administrator's side the effect was identical to a silent failure.
+これは誤った挙動という意味でのバグではない。フォールバック自体はおそらく正しい振る舞いである。割り込みの配送を完全に拒否するのは、要求された集合の外のCPUで配送するよりも悪いからだ。欠けていたのは純粋に可観測性だった。コードパスが設計どおりに正確に機能していても、システムが明示的なリクエストをこっそり覆したことを管理者が知る手段がまったくない、ということはありうる。それをバグと呼ぶか機能の欠落と呼ぶかは捉え方の問題だが、管理者側から見ればその影響は黙った失敗と同じだった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-Neil Horman's fix adds a single check to `activate_reserved()`, the function that finalizes a reserved interrupt's vector assignment: if the interrupt's effective affinity mask isn't a subset of the affinity mask that was actually requested, it now logs `pr_warn("irq %u: Affinity broken due to vector space exhaustion.\n", ...)`. Thomas Gleixner, who carried the patch into mainline, describes his own role as having "massaged [the] changelog and made the `pr_warn()` more informative" — the underlying diagnosis and fix came from Horman, working from a reported case that had been reproduced and tested against the fix before it merged.
+Neil Hormanの修正は、予約された割り込みのベクタ割り当てを確定させる関数 `activate_reserved()` にチェックを1つ追加する。割り込みの実効アフィニティマスクが、実際に要求されたアフィニティマスクの部分集合でない場合、`pr_warn("irq %u: Affinity broken due to vector space exhaustion.\n", ...)` をログに出すようになった。パッチをメインラインに取り込んだThomas Gleixnerは、自身の役割を「changelogに手を入れ、`pr_warn()` をより有益なものにした」と説明している。根本的な診断と修正はHormanによるものであり、マージ前に再現され修正に対してテストされた報告事例をもとにしていた。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A code path can be entirely correct and still constitute a bug from the operator's point of view, if it changes behavior with no way to observe that it happened.** The fallback-to-a-wider-CPU-set logic wasn't wrong; the absence of any log line when it triggered was the actual problem, and it took a real reported case — not a crash, not a test failure — to surface it.
+**コードパスが完全に正しくても、挙動を変えたことを観測する手段がなければ、運用者の視点からはバグになりうる。** より広いCPU集合にフォールバックするロジックは間違っていなかった。それが発動したときにログが1行も出ないことこそが本当の問題であり、それを表面化させるには、クラッシュでもテスト失敗でもない、実際に報告された事例が必要だった。
 
-**"The information is technically available somewhere" is not the same as "the information will be found."** `effective_affinity` told the truth for the entire two years this gap existed. What was missing was anything that would prompt someone to go look at it in the first place.
+**「情報は技術的にはどこかで入手できる」は「情報が見つけられる」と同じではない。** この欠落が存在した2年間ずっと、`effective_affinity` は真実を告げていた。欠けていたのは、そもそも誰かにそれを見に行かせるきっかけとなるものだった。
 
-!!! warning "Pattern to watch for"
-    Any code path that silently falls back to a different resource than what was requested — a different CPU, a different memory node, a different device — is a debugging trap waiting to happen, even if the fallback logic itself is sound. If the request can silently not be honored, log it once, even at a low level; the cost of one `pr_warn()` is far lower than the cost of an administrator not knowing where to look.
+!!! warning "注意すべきパターン"
+    要求されたものとは異なるリソース（別のCPU、別のメモリノード、別のデバイス）へ黙ってフォールバックするコードパスは、フォールバックのロジック自体が健全であっても、いずれデバッグの罠になる。リクエストが黙って尊重されない可能性があるなら、低いレベルでもよいので一度はログに出すこと。`pr_warn()` 1つのコストは、管理者がどこを見ればよいかわからないコストよりはるかに低い。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [IRQ Affinity and CPU Isolation](../irq-affinity.md) — the affinity-configuration interface this bug involves
-- [The Vector Leak That Needed Two CPUs to Go Offline in the Wrong Order](vector-leak-cpu-offline.md) — a different bug in the same vector-allocation machinery, five years later
+- [IRQアフィニティとCPU隔離](../irq-affinity.md) — このバグに関わるアフィニティ設定インターフェース
+- [2つのCPUが誤った順序でオフラインになって起きたベクタリーク](vector-leak-cpu-offline.md) — 同じベクタ割り当て機構における5年後の別のバグ
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: 743dac494d61](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=743dac494d61) — "x86/apic/vector: Warn when vector space exhaustion breaks affinity," the fix commit, including the 202-vector accounting and Gleixner's note on carrying the patch
+- [git.kernel.org: 743dac494d61](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=743dac494d61) — "x86/apic/vector: Warn when vector space exhaustion breaks affinity"、修正コミット。202ベクタの内訳と、パッチの取り込みに関するGleixnerの注記を含む

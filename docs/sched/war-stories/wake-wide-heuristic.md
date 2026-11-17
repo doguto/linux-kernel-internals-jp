@@ -1,26 +1,26 @@
-# wake_wide(): A Packing Shortcut Two Workloads Wanted Removed, and Nobody Could Prove Was Safe To Remove {#wake_wide-a-packing-shortcut-two-workloads-wanted-removed-and-nobody-could-prove-was-safe-to-remove}
+# wake_wide(): 2つのワークロードが削除を望み、誰も削除の安全性を証明できなかったパッキングの近道 {#wake_wide-a-packing-shortcut-two-workloads-wanted-removed-and-nobody-could-prove-was-safe-to-remove}
 
-> wake_wide() was rewritten in 2015 to make the scheduler search system-wide for an idle CPU, rather than pack, when it detects a genuine producer-consumer pair — but the same heuristic's fallback packing behavior for everything else also hurt hackbench-style all-to-all workloads, and a 2017 proposal to loosen that fallback stalled over an unquantified power-management cost, not a fight between the two workloads
+> wake_wide() は2015年に書き直され、本物の生産者・消費者のペアを検出したときには、スケジューラがパッキングするのではなく、システム全体からアイドルCPUを探すようになった。しかし同じヒューリスティックの、それ以外すべてに対するフォールバックのパッキング動作は、hackbenchのような全対全のワークロードにも害を与えていた。そして2017年にそのフォールバックを緩める提案は、2つのワークロード間の対立ではなく、定量化されていない電力管理上のコストをめぐって行き詰まった
 
-Reported by
-:   Josef Bacik (Facebook) — both the original workload behind the 2015 rewrite and the 2017 follow-up discussion, the latter also involving Joel Fernandes and Mike Galbraith
+報告者
+:   Josef Bacik（Facebook）— 2015年の書き直しの元となったワークロードと、2017年の後続の議論の両方。後者にはJoel FernandesとMike Galbraithも関わった
 
-Heuristic introduced by
-:   Michael Wang, as the original `wake_wide()`/`wakee_flips` tracking (`62470419e993`, 2013, mainline Linux 3.12); the version described below is Mike Galbraith's 2015 rewrite (`63b0e9edceec`, "sched/fair: Beef up wake_wide()"), feeding into `select_task_rq_fair()`
+ヒューリスティックの導入者
+:   Michael Wang。元の `wake_wide()`/`wakee_flips` による追跡として導入（`62470419e993`、2013年、メインラインLinux 3.12）。以下で説明するのは、`select_task_rq_fair()` に入力を与えるMike Galbraithによる2015年の書き直し版（`63b0e9edceec`、"sched/fair: Beef up wake_wide()"）である
 
-Article
-:   [LWN 728942](https://lwn.net/Articles/728942/), "Reconsidering the scheduler's wake_wide() heuristic," by Matt Fleming (July 27, 2017)
+記事
+:   [LWN 728942](https://lwn.net/Articles/728942/)、"Reconsidering the scheduler's wake_wide() heuristic"、Matt Fleming著（2017年7月27日）
 
-Outcome
-:   unresolved as of the cited discussion — "no proposal was the clear winner"
+結果
+:   引用した議論の時点では未解決 —「明確に勝った提案はなかった」
 
-*Part of [War Stories: Scheduler Bugs](../war-stories.md).*
+*[事件簿: スケジューラのバグ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-`wake_wide()` exists to answer a narrow but important question when the scheduler wakes a sleeping task: should it look for an idle CPU sharing a last-level cache (LLC) with the waker, or is it worth paying the cost of a system-wide search? Galbraith rewrote it in 2015 for a specific, real Facebook workload that Bacik had reported: a latency-sensitive, heavily multithreaded application following a producer-consumer pattern, with one master task per NUMA node. That application's performance dropped dramatically whenever the scheduler placed a woken task onto a busy neighboring CPU instead of finding a genuinely idle one — for this workload, cache locality mattered far less than avoiding contention, so the fix was to make the scheduler search *wide*, system-wide, rather than pack, whenever it detected that master/slave shape.
+`wake_wide()` は、スケジューラがスリープ中のタスクを起床させるときの、狭いが重要な問いに答えるために存在する。起床させる側とラストレベルキャッシュ（LLC）を共有するアイドルCPUを探すべきか、それともシステム全体を探索するコストを払う価値があるか、である。Galbraithは2015年、Bacikが報告したFacebookの実際の特定ワークロードのためにこれを書き直した。それはレイテンシに敏感で高度にマルチスレッド化されたアプリケーションで、NUMAノードごとに1つのマスタータスクを持つ生産者・消費者パターンに従っていた。スケジューラが起床したタスクを本当にアイドルなCPUを見つける代わりに混雑した隣のCPUに置くたびに、このアプリケーションの性能は劇的に低下した。このワークロードではキャッシュの局所性よりも競合を避けることのほうがはるかに重要だったので、修正は、そのマスター／スレーブの形を検出したときには常に、パッキングするのではなくシステム全体へ*広く*探索させることだった。
 
-The heuristic tracks how often a task and its wakee flip roles (`p->wakee_flips`) to infer a master/slave relationship, then decides whether to constrain the search to the local LLC domain:
+このヒューリスティックは、タスクとその起床相手が役割を入れ替える頻度（`p->wakee_flips`）を追跡してマスター／スレーブ関係を推定し、探索をローカルのLLCドメインに限定するかどうかを決める。
 
 ```c
 static int wake_wide(struct task_struct *p)
@@ -37,40 +37,40 @@ static int wake_wide(struct task_struct *p)
 }
 ```
 
-If the "slave" side's flip count is below the LLC's CPU count (or the ratio between them is small), `wake_wide()` returns 0 and `select_task_rq_fair()` packs the pair's tasks into a single LLC domain rather than searching the whole system. Return 1 triggers the wide, system-wide search Facebook's workload needed.
+「スレーブ」側の入れ替わり回数がLLCのCPU数を下回る（あるいは両者の比が小さい）場合、`wake_wide()` は0を返し、`select_task_rq_fair()` はシステム全体を探索する代わりにペアのタスクを単一のLLCドメインにパッキングする。1を返すと、Facebookのワークロードが必要としていた、システム全体への広い探索が始まる。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Joel Fernandes questioned the `slave * factor` multiplication in an LKML discussion, and Bacik used the opening to raise a second, different problem: the `slave < factor` fallback — the condition that packs a wakee pair into one LLC domain when neither side shows a strong master/slave flip pattern — was also catching `hackbench`, which has no master/slave pair at all. `hackbench` forks more tasks than fit in one LLC domain in an all-to-all communication pattern; because none of those tasks individually accumulate the flip counts that would trigger a wide search, `wake_wide()`'s packing fallback repeatedly pulled them back into a single domain, and the tool's own shifting load pattern then pushed them back out again — producing extremely poor cache usage and worse measured performance than leaving the tasks spread out in the first place.
+Joel FernandesはLKMLの議論で `slave * factor` の乗算に疑問を呈し、Bacikはその機会を使って、別の2つ目の問題を提起した。`slave < factor` のフォールバック（どちらの側も強いマスター／スレーブの入れ替わりパターンを示さないときに、起床ペアを1つのLLCドメインにパッキングする条件）が、マスター／スレーブのペアをまったく持たない `hackbench` も捕らえていたのである。`hackbench` は全対全の通信パターンで、1つのLLCドメインに収まる以上のタスクをforkする。どのタスクも個別には広い探索を引き起こすほどの入れ替わり回数を蓄積しないため、`wake_wide()` のパッキングのフォールバックはそれらを繰り返し単一のドメインに引き戻し、ツール自身の変動する負荷パターンがそれらを再び押し出した。その結果、キャッシュの使い方は極めて悪くなり、測定された性能はそもそもタスクを分散させたままにしておく場合より悪化した。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-Bacik suggested simply dropping the `slave < factor` test, so the heuristic would default to a wide search more often. Fleming's own data, reported in the same article, showed that dropping the check entirely improved `hackbench`'s worst-case run duration. Nothing in that data showed a corresponding regression for Facebook's workload — the master/slave detection Facebook actually depends on lives in the `master < slave * factor` branch, which the proposal left untouched.
+Bacikは、単に `slave < factor` のテストを削除し、ヒューリスティックがより頻繁に広い探索をデフォルトとするようにすることを提案した。同じ記事で報告されたFleming自身のデータは、チェックを完全に削除すると `hackbench` の最悪ケースの実行時間が改善することを示していた。そのデータのどこにも、Facebookのワークロードで対応するリグレッションは示されていなかった。Facebookが実際に依存しているマスター／スレーブの検出は `master < slave * factor` の分岐にあり、提案はそこには手を付けていなかった。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The `slave < factor` fallback exists to avoid paying for a system-wide search when there's no detected reason to believe one is worth it — a cost-avoidance shortcut, not a mechanism Facebook's workload specifically relies on. `hackbench`'s all-to-all pattern falls into that fallback by coincidence: many tasks with individually modest flip counts look, to this one signal, like weak evidence against a wide search, even though the *real* reason a wide search would help here has nothing to do with a master/slave relationship existing or not. The heuristic conflates "no strong pairing detected" with "packing is fine," and those aren't the same claim.
+`slave < factor` のフォールバックは、システム全体の探索に価値があると信じる理由が検出されていないときに、そのコストを払うのを避けるために存在する。これはコスト回避の近道であり、Facebookのワークロードが特に依存している仕組みではない。`hackbench` の全対全パターンは、偶然そのフォールバックに該当する。個々には入れ替わり回数がそれほど多くない多数のタスクは、この1つの信号から見ると、広い探索に反対する弱い証拠のように見える。ここで広い探索が役立つ*本当の*理由は、マスター／スレーブ関係が存在するかどうかとは何の関係もないにもかかわらずである。このヒューリスティックは「強いペアが検出されない」と「パッキングで問題ない」を混同しており、それらは同じ主張ではない。
 
-That still didn't make loosening the fallback an easy call. The article notes a dimension entirely absent from the hackbench-focused data: packing tasks onto fewer CPUs is also a power-management strategy, letting more CPUs stay in a low-power idle state instead of being woken for a spread-out workload. Nobody in the thread had numbers for what a systematically wider default search would cost on that axis. On top of that, Galbraith — the rewrite's author — was wary of touching a heuristic this cheap and this widely exercised on the strength of one benchmark, regardless of whose data motivated it.
+それでも、フォールバックを緩めるのは簡単な判断ではなかった。記事は、hackbenchに焦点を当てたデータには完全に欠けていた観点を指摘している。より少ないCPUにタスクをパッキングすることは電力管理の戦略でもあり、分散したワークロードのために起こされる代わりに、より多くのCPUが低電力のアイドル状態に留まれるようにする。スレッドの誰も、体系的にデフォルトの探索を広げることがその軸でどれだけのコストになるかの数字を持っていなかった。それに加えて、書き直しの作者であるGalbraithは、誰のデータが動機であれ、1つのベンチマークを根拠にこれほど安価でこれほど広く実行されるヒューリスティックに手を入れることに慎重だった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-None reached, as of the cited discussion. Bacik's own conclusion: "messing with `wake_wide()` itself is too big of a hammer, we probably need a middle ground." Galbraith's response set the bar for any replacement: "If you have ideas to improve or replace that heuristic, by all means go for it, just make damn sure it's dirt cheap. Heuristics all suck one way or another, problem is that nasty old 'perfect is the enemy of good' adage."
+引用した議論の時点では、何の結論にも至っていない。Bacik自身の結論は "messing with `wake_wide()` itself is too big of a hammer, we probably need a middle ground"（訳: `wake_wide()` そのものをいじるのは大きすぎるハンマーであり、おそらく中間的な解決が必要だ）だった。Galbraithの返答は、あらゆる代替案に対する基準を定めた。"If you have ideas to improve or replace that heuristic, by all means go for it, just make damn sure it's dirt cheap. Heuristics all suck one way or another, problem is that nasty old 'perfect is the enemy of good' adage."（訳: そのヒューリスティックを改善または置き換えるアイデアがあるなら、ぜひやってほしい。ただし、とにかく激安であることを確実にしてくれ。ヒューリスティックはどれも何かしらダメなものだ。問題は、あの厄介な古い格言「完璧は善の敵」なのだ。）
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A heuristic's cost-avoidance shortcut can hurt an unrelated workload it was never tuned against, without that fix costing the workload the heuristic *was* tuned for.** `hackbench` and Facebook's producer-consumer application didn't actually want opposite things here — the fallback that hurt `hackbench` wasn't load-bearing for Facebook's case at all. What stalled the fix was a cost nobody had measured on a third axis: power.
+**ヒューリスティックのコスト回避の近道は、チューニングの対象にしたことのない無関係なワークロードに害を与えうる。そしてその修正は、ヒューリスティックが*本来*チューニングされたワークロードに何のコストも与えないことがある。** ここで `hackbench` とFacebookの生産者・消費者アプリケーションが望んでいたのは、実は正反対のものではなかった。`hackbench` に害を与えたフォールバックは、Facebookのケースではまったく重要な役割を担っていなかった。修正を行き詰まらせたのは、第3の軸である電力について、誰も測定していなかったコストだった。
 
-**Scheduler tuning discussions routinely have to weigh dimensions the benchmark in front of you doesn't measure.** `hackbench` run time says nothing about power consumption, and a fix that looks like a clear win against the workload that motivated it can still be shelved because of a plausible cost elsewhere that nobody could rule out.
+**スケジューラのチューニングの議論では、目の前のベンチマークが測定しない観点を比較検討しなければならないことがよくある。** `hackbench` の実行時間は消費電力について何も語らない。そして、動機となったワークロードに対して明らかな勝利に見える修正でも、誰も否定できなかった別の場所でのもっともらしいコストのために棚上げされることがある。
 
-!!! note "Not every war story ends with a fix"
-    This one is included specifically because it didn't resolve cleanly. A change that helped the workload actually reported in the thread, with no data showing it hurt the workload the heuristic was originally written for, still didn't ship — because an unmeasured concern (power) and a general caution about touching cheap, widely-exercised heuristics were enough to stall it. Sometimes the honest end state of a scheduler debate is "we didn't find a reason this is unsafe, and that wasn't enough."
+!!! note "すべての事件簿が修正で終わるわけではない"
+    この事件は、すっきりと解決しなかったからこそ取り上げている。スレッドで実際に報告されたワークロードを助け、ヒューリスティックが元々書かれた対象のワークロードに害を与えることを示すデータもなかった変更が、それでも出荷されなかった。測定されていない懸念（電力）と、安価で広く実行されるヒューリスティックに手を入れることへの一般的な慎重さだけで、それを止めるには十分だったからである。スケジューラの議論の正直な結末が「これが危険だという理由は見つからなかったが、それでは十分ではなかった」であることもある。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Scheduler Overview](../README.md) — the fair scheduling class and task placement
-- [EEVDF](../eevdf.md) — the scheduling algorithm `select_task_rq_fair()`'s placement decisions feed into
+- [スケジューラの概要](../README.md) — フェアスケジューリングクラスとタスク配置
+- [EEVDF](../eevdf.md) — `select_task_rq_fair()` の配置判断が入力されるスケジューリングアルゴリズム
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [LWN: Reconsidering the scheduler's wake_wide() heuristic](https://lwn.net/Articles/728942/) — Matt Fleming's coverage of the LKML discussion, including the `wake_wide()` source and the Bacik/Fernandes/Galbraith exchange quoted above
+- [LWN: Reconsidering the scheduler's wake_wide() heuristic](https://lwn.net/Articles/728942/) — Matt FlemingによるLKMLの議論の解説。`wake_wide()` のソースと、上で引用したBacik/Fernandes/Galbraithのやり取りを含む

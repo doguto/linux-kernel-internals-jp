@@ -101,4 +101,28 @@
 | Life of a ... | 〜の一生 |
 | Why ... | なぜ〜か |
 
+### 事件簿（War Stories）ページの定型見出し
+
+| 英語 | 訳語 |
+|---|---|
+| Disclosed | 公開日 |
+| Reported by / Found by | 報告者 / 発見者 |
+| Bug present since | バグの存在期間 |
+| Exploitable since | 悪用可能になった時期 |
+| Fixed in | 修正 |
+| Actively exploited | 実際の悪用 |
+| Before state | 事前の状態 |
+| The trigger | きっかけ |
+| Resolution | 解決 |
+| What it taught us | 教訓 |
+| External references | 外部参考資料 |
+| Pattern to watch for | 注意すべきパターン |
+| Observed behavior | 観測された挙動 |
+| Why it happened | なぜ起きたか |
+| Introduced in | 混入 |
+| （冒頭の帰属表記） | `*[事件簿: …](../war-stories.md)の一部。*` |
+| erratum / errata | エラッタ |
+| grace period | グレースピリオド |
+| extent | エクステント |
+
 上の表にない用語は、Linux カーネル関連の日本語文献で一般的な訳を使う。迷ったら原語のまま残す。長音記号は「ユーザー」「サーバー」「メモリ」「コンピュータ」「パラメータ」「ハンドラ」「アロケータ」「スケジューラ」とする（語尾の長音は、上の語以外は JIS 慣例に従い省略してよい）。

@@ -1,35 +1,35 @@
-# The `drm_sched_entity_kill_jobs_cb` Lockdep Deadlock {#the-drmschedentitykilljobs_cb-lockdep-deadlock}
+# `drm_sched_entity_kill_jobs_cb` のlockdepデッドロック {#the-drmschedentitykilljobs_cb-lockdep-deadlock}
 
-> A fence-signaling callback running in interrupt context tried to take a lock that ordinary process context also held without disabling interrupts — a classic interrupt-unsafe locking bug, caught by lockdep on a real user's machine
+> 割り込みコンテキストで実行されるフェンスシグナルのコールバックが、通常のプロセスコンテキストが割り込みを無効化せずに保持しているロックを取ろうとしていた。典型的な割り込み非安全なロックのバグであり、実際のユーザーのマシン上でlockdepが捕まえた
 
-Landed
-:   November 2025 (backported to stable 6.2+)
+収録
+:   2025年11月（stable 6.2以降にバックポート）
 
-Scheduler
-:   `drm_sched`, shared across every driver using the common DRM scheduler
+スケジューラ
+:   `drm_sched`。共通DRMスケジューラを使うすべてのドライバで共有
 
-Author
-:   Pierre-Eric Pelloux-Prayer (AMD)
+作者
+:   Pierre-Eric Pelloux-Prayer（AMD）
 
-Reported by
-:   Mikhail Gavrilov, via [Mesa issue #13908](https://gitlab.freedesktop.org/mesa/mesa/-/issues/13908)
+報告者
+:   Mikhail Gavrilov、[Mesa issue #13908](https://gitlab.freedesktop.org/mesa/mesa/-/issues/13908) にて
 
-Fixed in
+修正
 :   [`487df8b69834`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=487df8b698345dd5a91346335f05170ed5f29d4e)
 
-Not a CVE
+CVEではない
 
-*Part of [War Stories: GPU/DRM Bugs and Regressions](../war-stories.md).*
+*[事件簿: GPU/DRMのバグとリグレッション](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-When a `drm_sched` entity is torn down — a process exits, a context is destroyed — any jobs still queued on that entity need to be cleaned up. `drm_sched_entity_kill_jobs_cb()` handles that: it runs as a callback attached to a job's dependency fence, walks the entity's remaining `job->dependencies` (stored in an `xarray`), and re-arms the cleanup on the next dependency.
+`drm_sched` のエンティティが破棄されるとき（プロセスが終了する、コンテキストが破棄される）、そのエンティティにまだキューイングされているジョブは後始末される必要がある。それを担うのが `drm_sched_entity_kill_jobs_cb()` である。これはジョブの依存フェンスに取り付けられたコールバックとして実行され、エンティティに残っている `job->dependencies`（`xarray` に格納されている）を走査し、次の依存関係に対して後始末を再設定する。
 
-`job->dependencies` is protected by the xarray's own internal spinlock, `xa_lock`. Ordinary code that adds to it — `drm_sched_job_add_dependency()`, and `drm_sched_entity_kill_jobs_cb()` itself when it iterates — used the plain `xa_*` accessors, which take `xa_lock` without disabling interrupts.
+`job->dependencies` は、xarray自身の内部spinlockである `xa_lock` で保護されている。そこに追加を行う通常のコード（`drm_sched_job_add_dependency()`、および反復処理を行う際の `drm_sched_entity_kill_jobs_cb()` 自身）は素の `xa_*` アクセサを使っており、これらは割り込みを無効化せずに `xa_lock` を取得する。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-`drm_sched_entity_kill_jobs_cb()` is registered as a `dma_fence` callback, which means it can run from `dma_fence_signal()` — in interrupt context. Mikhail Gavrilov filed a bug against Mesa after lockdep caught the resulting interrupt-unsafe locking pattern on real hardware, with the full scenario captured in the trace:
+`drm_sched_entity_kill_jobs_cb()` は `dma_fence` のコールバックとして登録されている。つまり `dma_fence_signal()` から、割り込みコンテキストで実行されうる。lockdepが実機上でその結果生じる割り込み非安全なロックのパターンを捕まえた後、Mikhail GavrilovがMesaに対してバグを報告した。トレースには完全なシナリオが記録されていた。
 
 ```
 Possible interrupt unsafe locking scenario:
@@ -46,45 +46,45 @@ Possible interrupt unsafe locking scenario:
 *** DEADLOCK ***
 ```
 
-CPU0 is any ordinary process-context function touching `job->dependencies` through the non-IRQ-safe `xa_*` accessors. CPU1 is `drm_sched_entity_kill_jobs_cb()`, running as a fence callback in interrupt context, which needs the same `xa_lock` CPU0 already holds — and if the interrupt lands on CPU0 mid-hold, CPU1 spins forever waiting for a lock CPU0 can't release until the interrupt handler returns, which itself is waiting on CPU1.
+CPU0は、IRQ安全でない `xa_*` アクセサを通じて `job->dependencies` に触れる、通常のプロセスコンテキストの任意の関数である。CPU1は、割り込みコンテキストでフェンスのコールバックとして実行される `drm_sched_entity_kill_jobs_cb()` であり、CPU0がすでに保持している同じ `xa_lock` を必要とする。CPU0がロックを保持している最中に割り込みが入ると、CPU1は、割り込みハンドラが戻るまでCPU0が解放できないロックを待って永遠にスピンし、その割り込みハンドラ自体はCPU1を待っている。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-Christian König identified a second, independent way the same function could deadlock, even if the interrupt-safety of the xarray locking were fixed on its own: `dma_fence_signal()` itself takes `fence.lock` before invoking callbacks, and `drm_sched_entity_kill_jobs_cb()`'s own iteration calls `dma_fence_add_callback()` on each dependency — which also takes *that* fence's `lock`. If the fence currently signaling and a fence being newly waited-on during cleanup happened to share the same underlying spinlock, the callback would deadlock against the very signal that invoked it:
+Christian Königは、xarrayのロックの割り込み安全性だけを修正したとしても、同じ関数がデッドロックしうる2つ目の独立した経路を特定した。`dma_fence_signal()` 自体がコールバックを呼び出す前に `fence.lock` を取得し、`drm_sched_entity_kill_jobs_cb()` 自身の反復処理は各依存関係に対して `dma_fence_add_callback()` を呼ぶ。これも*その*フェンスの `lock` を取得する。現在シグナルしているフェンスと、後始末の間に新たに待機対象となるフェンスが、たまたま同じ下位のspinlockを共有していた場合、コールバックはそれを呼び出したシグナルそのものに対してデッドロックすることになる。
 
 ```
-dma_fence_signal() // locks f1.lock
+dma_fence_signal() // f1.lock をロックする
 -> drm_sched_entity_kill_jobs_cb()
 -> foreach dependencies
-   -> dma_fence_add_callback() // locks f2.lock
+   -> dma_fence_add_callback() // f2.lock をロックする
 ```
 
-So there were two independent deadlock shapes rooted in the same design choice: doing xarray iteration and fence-callback registration directly inside a callback that's already running with a fence lock held, in interrupt context.
+つまり、同じ設計判断に根ざした2つの独立したデッドロックの形があった。割り込みコンテキストで、すでにフェンスのロックを保持したまま実行されているコールバックの中で、xarrayの反復処理とフェンスのコールバック登録を直接行っていたことである。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-Switching every `xa_*` call to its interrupt-safe `xa_*_irq` counterpart would have fixed the first deadlock alone, but not the second — the fence-lock nesting problem is structural to running that logic *at all* inside a signaling callback, no matter how carefully the xarray locking is made interrupt-safe. A partial fix (irq-safe xarray accessors only) would have looked complete under the lockdep trace that motivated it, while leaving the fence-lock nesting hazard Christian König spotted entirely unaddressed.
+すべての `xa_*` 呼び出しを割り込み安全な `xa_*_irq` 版に切り替えれば、1つ目のデッドロックだけは修正できたが、2つ目は修正できなかった。フェンスのロックの入れ子問題は、xarrayのロックをどれほど注意深く割り込み安全にしても、そのロジックをシグナルのコールバック内で実行すること*自体*に構造的に伴うものである。部分的な修正（IRQ安全なxarrayアクセサのみ）は、その動機となったlockdepのトレースの下では完全に見えただろうが、Christian Königが見つけたフェンスのロックの入れ子の危険にはまったく対処しないままになっていた。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`487df8b69834` moves the dependency-iteration and re-arming logic out of the fence-signaling callback entirely, into a new `drm_sched_entity_kill_jobs_work()` run as ordinary work, not as a callback invoked directly from `dma_fence_signal()`. That sidesteps both deadlock shapes at once: work-queue context isn't interrupt context, so the xarray locking is no longer interrupt-unsafe, and it isn't running with any fence's `lock` already held, so the nested `dma_fence_add_callback()` calls can't collide with the fence that triggered the callback. The fix carries `Cc: stable@vger.kernel.org # v6.2+` and `Fixes: 2fdb8a8f07c2` ("drm/scheduler: rework entity flush, kill and fini"), the commit that had originally introduced this cleanup path.
+`487df8b69834` は、依存関係の反復処理と再設定のロジックをフェンスシグナルのコールバックから完全に取り出し、新しい `drm_sched_entity_kill_jobs_work()` に移す。これは `dma_fence_signal()` から直接呼び出されるコールバックとしてではなく、通常のワークとして実行される。これにより2つのデッドロックの形を同時に回避できる。workqueueのコンテキストは割り込みコンテキストではないので、xarrayのロックはもはや割り込み非安全ではない。また、どのフェンスの `lock` もすでに保持した状態で実行されるわけではないので、入れ子になった `dma_fence_add_callback()` の呼び出しが、コールバックを引き起こしたフェンスと衝突することはない。修正には `Cc: stable@vger.kernel.org # v6.2+` と、この後始末パスを最初に導入したコミットを示す `Fixes: 2fdb8a8f07c2`（"drm/scheduler: rework entity flush, kill and fini"）が付いている。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A fix scoped to the bug lockdep actually reported can still leave a structurally identical bug standing.** The interrupt-unsafe xarray locking was the finding; the fence-lock nesting was a second, independent deadlock in the same function that required looking past the specific lockdep splat to the shape of the code around it.
+**lockdepが実際に報告したバグに範囲を絞った修正では、構造的に同一のバグが残ったままになりうる。** 割り込み非安全なxarrayのロックは発見されたものだった。フェンスのロックの入れ子は同じ関数における2つ目の独立したデッドロックであり、特定のlockdepの出力の先にある、周囲のコードの形を見る必要があった。
 
-**Code that runs as a `dma_fence` signaling callback inherits interrupt-context and lock-nesting constraints it may not obviously look like it needs**, especially when that code was originally written as ordinary cleanup logic and only later became reachable from a signaling path as the surrounding code evolved — `2fdb8a8f07c2`'s "rework" put this logic where it is; the deadlock wasn't there from day one.
+**`dma_fence` のシグナルコールバックとして実行されるコードは、一見必要とは思えない割り込みコンテキストやロックの入れ子の制約を引き継ぐ。** そのコードが元々は通常の後始末ロジックとして書かれ、周囲のコードの進化につれて後からシグナルパスから到達可能になった場合は特にそうである。このロジックを今の場所に置いたのは `2fdb8a8f07c2` の「rework」であり、デッドロックは最初から存在していたわけではない。
 
-!!! warning "Pattern to watch for"
-    Any logic invoked as a `dma_fence` callback — directly registered via `dma_fence_add_callback()`, or reached through one — runs in whatever context the fence signals from, which can be interrupt context. Grep for locking calls (`xa_lock`, spinlocks, mutexes) inside fence-callback functions that don't use their `_irq`/`_irqsave` variants, and check whether the callback itself calls back into fence machinery that could nest against the signaling fence's own lock.
+!!! warning "注意すべきパターン"
+    `dma_fence` のコールバックとして呼び出されるロジック（`dma_fence_add_callback()` で直接登録されたものでも、そこから到達するものでも）は、フェンスがシグナルされるコンテキストで実行され、それは割り込みコンテキストでありうる。フェンスのコールバック関数の中で `_irq`/`_irqsave` 版を使っていないロック呼び出し（`xa_lock`、spinlock、mutex）をgrepし、コールバック自体が、シグナルしているフェンス自身のロックと入れ子になりうるフェンス機構を呼び返していないかを確認すること。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Command Submission, `dma_fence`, and the GPU Scheduler](../command-submission.md) — `dma_fence` signaling, callbacks, and the cross-driver contract this bug's fix now honors
-- [The msm GPU Recovery/Shrinker Deadlock](msm-shrinker-deadlock.md) — a different `dma_fence`-adjacent deadlock, on the reclaim side rather than the interrupt-safety side
-- [RCU (Read-Copy-Update)](../../locking/rcu.md) and [Atomic Operations and Memory Barriers](../../locking/atomics.md) — general background on interrupt-context locking hazards
+- [コマンド投入、`dma_fence`、GPUスケジューラ](../command-submission.md) — `dma_fence` のシグナル、コールバック、そしてこのバグの修正が今は守っているドライバ横断の契約
+- [msm GPUの回復処理とshrinkerのデッドロック](msm-shrinker-deadlock.md) — 割り込み安全性の側ではなくメモリ回収の側で起きた、別の `dma_fence` 関連のデッドロック
+- [RCU（Read-Copy-Update）](../../locking/rcu.md)と[アトミック操作とメモリバリア](../../locking/atomics.md) — 割り込みコンテキストにおけるロックの危険に関する一般的な背景
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: 487df8b69834](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=487df8b698345dd5a91346335f05170ed5f29d4e) — "drm/sched: Fix deadlock in drm_sched_entity_kill_jobs_cb," full lockdep trace and both deadlock scenarios
-- [Mesa GitLab issue #13908](https://gitlab.freedesktop.org/mesa/mesa/-/issues/13908) — Mikhail Gavrilov's original report
+- [git.kernel.org: 487df8b69834](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=487df8b698345dd5a91346335f05170ed5f29d4e) — "drm/sched: Fix deadlock in drm_sched_entity_kill_jobs_cb"、完全なlockdepトレースと両方のデッドロックシナリオ
+- [Mesa GitLab issue #13908](https://gitlab.freedesktop.org/mesa/mesa/-/issues/13908) — Mikhail Gavrilovによる最初の報告

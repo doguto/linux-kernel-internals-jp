@@ -1,48 +1,48 @@
-# Stale ptracer Credentials {#stale-ptracer-credentials}
+# 古いptracerのクレデンシャル {#stale-ptracer-credentials}
 
-> CVE-2019-13272 — `PTRACE_TRACEME` recorded the credentials of the *parent* it drafted as tracer rather than those of the child that actually requested the relationship, so an unprivileged child could obtain a root-marked ptrace relationship no privileged code ever asked for — and keep it after that parent dropped privileges and became attacker-controlled
+> CVE-2019-13272 — `PTRACE_TRACEME`は、実際に関係を要求した子ではなく、トレーサーとして引き込んだ*親*のクレデンシャルを記録していた。そのため非特権の子が、特権を持つコードが一度も要求していない、rootとしてマークされたptrace関係を手に入れ、その親が特権を落として攻撃者の制御下に入った後もそれを保持できた
 
-Disclosed
-:   July 17, 2019 (fix authored July 4, 2019)
+公開日
+:   2019年7月17日（修正の作成は2019年7月4日）
 
-Reported by
-:   Jann Horn, Google Project Zero (issue 1903)
+報告者
+:   Jann Horn、Google Project Zero（issue 1903）
 
 CVSS
-:   7.8 HIGH (`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H` — NVD primary and CISA-ADP's secondary score agree; CVSS 2.0: 7.2 HIGH)
+:   7.8 HIGH（`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H` — NVDの主評価とCISA-ADPの副次評価が一致。CVSS 2.0: 7.2 HIGH）
 
-Bug present since
-:   4.10 (commit `64b875f7ac8a`, November 2016)
+バグの存在期間
+:   4.10以降（コミット`64b875f7ac8a`、2016年11月）
 
-Fixed in
-:   5.2 upstream; stable 5.1.17, 4.19.58, 4.14.133, 4.9.185, 4.4.185 (all announced July 10, 2019), 3.16.71
+修正
+:   アップストリーム5.2。stable 5.1.17、4.19.58、4.14.133、4.9.185、4.4.185（いずれも2019年7月10日告知）、3.16.71
 
-Exploit tool
-:   yes — four Exploit-DB entries (three PoCs, one Metasploit module)
+エクスプロイトツール
+:   あり — Exploit-DBに4件（PoC 3件、Metasploitモジュール1件）
 
-Actively exploited
-:   yes — added to CISA's KEV catalog December 10, 2021 (per [NVD](https://nvd.nist.gov/vuln/detail/CVE-2019-13272))
+実際の悪用
+:   あり — 2021年12月10日にCISAのKEVカタログに追加（[NVD](https://nvd.nist.gov/vuln/detail/CVE-2019-13272)による）
 
-*Part of [War Stories: Linux Security Bugs and CVEs](../war-stories.md).*
+*[事件簿: LinuxセキュリティのバグとCVE](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-When one process traces another, the kernel needs to remember *how privileged the tracer was at the moment the relationship was formed*. It cannot just re-check the tracer's current credentials later, because the tracer might legitimately drop privileges after attaching — and it cannot ignore the question either, because the answer decides whether a traced process is allowed to complete a setuid `execve()` at full privilege.
+あるプロセスが別のプロセスをトレースするとき、カーネルは*関係が形成された時点でトレーサーがどれだけの特権を持っていたか*を覚えておく必要がある。後でトレーサーの現在のクレデンシャルを再チェックするだけでは済まない。トレーサーはアタッチ後に正当に特権を落とすことがあるからである。かといってこの問いを無視することもできない。その答えが、トレースされているプロセスがsetuidの`execve()`を完全な特権で完了してよいかを決めるからである。
 
-Linux stores that answer in a single field on the *tracee*, added to `struct task_struct` in 2016 by [`64b875f7ac8a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=64b875f7ac8a5d60a4e191479299e931ee949b67) ("ptrace: Capture the ptracer's creds not PT_PTRACE_CAP"):
+Linuxはその答えを*トレース対象（tracee）*の単一のフィールドに格納する。これは2016年に[`64b875f7ac8a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=64b875f7ac8a5d60a4e191479299e931ee949b67)（"ptrace: Capture the ptracer's creds not PT_PTRACE_CAP"）によって`struct task_struct`に追加された:
 
 ```c
 /* include/linux/sched.h */
-const struct cred __rcu *ptracer_cred; /* Tracer's credentials at attach */
+const struct cred __rcu *ptracer_cred; /* アタッチ時のトレーサーのクレデンシャル */
 ```
 
-That commit replaced an older single bit, `PT_PTRACE_CAP`, whose problem was that it recorded only *whether* the tracer was capable, not *in which user namespace* — Eric Biederman's commit message notes that "this has already allowed one mistake through insufficient granularity," and that the `PTRACE_TRACEME` path had been "overlooked" when the bit was first introduced. Storing a full `struct cred` pointer fixed both, and a new helper answered the question on demand:
+このコミットは、古い単一ビット`PT_PTRACE_CAP`を置き換えた。そのビットの問題は、トレーサーが特権を持っていた*かどうか*だけを記録し、*どのユーザー名前空間で*持っていたかを記録しないことだった。Eric Biedermanのコミットメッセージは「this has already allowed one mistake through insufficient granularity」（訳: これは粒度の不足によってすでに1つの誤りを許している）と述べ、さらにこのビットが最初に導入されたときに`PTRACE_TRACEME`の経路が「overlooked」（見落とされていた）と記している。完全な`struct cred`ポインタを格納することで両方が修正され、新しいヘルパーが必要に応じて問いに答えた:
 
 ```c
 /* kernel/capability.c */
 bool ptracer_capable(struct task_struct *tsk, struct user_namespace *ns)
 {
-	int ret = 0;  /* An absent tracer adds no restrictions */
+	int ret = 0;  /* トレーサーがいなければ制限は追加されない */
 	const struct cred *cred;
 	rcu_read_lock();
 	cred = rcu_dereference(tsk->ptracer_cred);
@@ -53,7 +53,7 @@ bool ptracer_capable(struct task_struct *tsk, struct user_namespace *ns)
 }
 ```
 
-By the 5.2 development cycle, the code that populated that field looked like this (`kernel/ptrace.c`):
+5.2の開発サイクルの時点で、そのフィールドを設定するコードは次のようになっていた（`kernel/ptrace.c`）:
 
 ```c
 void __ptrace_link(struct task_struct *child, struct task_struct *new_parent,
@@ -73,25 +73,25 @@ static void ptrace_link(struct task_struct *child, struct task_struct *new_paren
 }
 ```
 
-The `ptrace_link()` wrapper had exactly two callers, and the whole bug lives in the difference between them:
+`ptrace_link()`ラッパーの呼び出し元はちょうど2つであり、バグのすべてはその2つの違いの中にある:
 
 ```c
 ptrace_link(task, current);                    /* ptrace_attach()  */
 ptrace_link(current, current->real_parent);    /* ptrace_traceme() */
 ```
 
-For `PTRACE_ATTACH`, `new_parent` *is* `current` — the process asking for the relationship — so `__task_cred(new_parent)` names the right process. For `PTRACE_TRACEME`, `new_parent` is `current->real_parent`, and the process asking for the relationship is the child. The wrapper recorded `new_parent`'s credentials in both cases, because it derived the credentials from the *tracer* argument rather than from the *requester*.
+`PTRACE_ATTACH`では、`new_parent`は`current`、つまり関係を要求しているプロセス*そのもの*なので、`__task_cred(new_parent)`は正しいプロセスを指す。`PTRACE_TRACEME`では、`new_parent`は`current->real_parent`であり、関係を要求しているプロセスは子である。ラッパーはどちらの場合も`new_parent`のクレデンシャルを記録していた。クレデンシャルを*要求者*からではなく*トレーサー*の引数から導出していたからである。
 
-For background on `struct cred`, its copy-on-write discipline, and what happens to credentials across `execve()`, see [Credentials and User Namespaces](../credentials.md). The privilege-dropping pattern this bug undermines — acquire root, do the privileged work, `setuid()` back down, then `execve()` something less trusted — is covered in [Linux Capabilities](../capabilities.md#capability-based-privilege-dropping).
+`struct cred`、そのコピーオンライトの規律、そして`execve()`をまたいでクレデンシャルに何が起きるかの背景については、[クレデンシャルとユーザー名前空間](../credentials.md)を参照。このバグが損なう特権放棄のパターン、つまりrootを取得し、特権が必要な作業を行い、`setuid()`で権限を戻し、それから信頼度の低い何かを`execve()`する、というパターンは[Linuxケイパビリティ](../capabilities.md#capability-based-privilege-dropping)で扱っている。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-`PTRACE_TRACEME` is unusual among ptrace requests: it is issued by the *tracee*, and it does not name a tracer. The kernel picks one for you — your real parent — and the only permission check is an LSM hook, `security_ptrace_traceme(current->parent)`, which asks whether the *parent* may trace the child — never whether the child should be allowed to draft it:
+`PTRACE_TRACEME`はptraceのリクエストの中でも特殊である。*トレース対象*が発行し、トレーサーを指定しない。カーネルがトレーサー、つまり実の親を代わりに選び、唯一の権限チェックはLSMフック`security_ptrace_traceme(current->parent)`である。これは*親*が子をトレースしてよいかを問うものであり、子が親を引き込むことを許されるべきかは決して問わない:
 
 ```c
 /* kernel/ptrace.c, ptrace_traceme() */
 write_lock_irq(&tasklist_lock);
-/* Are we already being traced? */
+/* すでにトレースされているか？ */
 if (!current->ptrace) {
 	ret = security_ptrace_traceme(current->parent);
 	if (!ret && !(current->real_parent->flags & PF_EXITING)) {
@@ -102,27 +102,27 @@ if (!current->ptrace) {
 write_unlock_irq(&tasklist_lock);
 ```
 
-So an unprivileged process can unilaterally cause `ptracer_cred` to be set to a *snapshot of whatever credentials its parent happens to hold at that instant*. It does not need permission to trace the parent; it does not need the parent's cooperation; the parent is not even notified.
+したがって非特権プロセスは、`ptracer_cred`を*その瞬間に親がたまたま保持しているクレデンシャルのスナップショット*に一方的に設定させることができる。親をトレースする権限は必要ない。親の協力も必要ない。親には通知すらされない。
 
-The exploitation window is the gap in a privileged parent's lifetime between "is root" and "is no longer root." Jann Horn's [original Project Zero report](https://project-zero.issues.chromium.org/issues/42450993) (issue 1903) demonstrated it against polkit's `pkexec`: an attacker process A forks B; B forks a child C and only *then* `execve()`s `pkexec`, so C's real parent is now running as root; C calls `PTRACE_TRACEME`, and its recorded `ptracer_cred` snapshots root-owning B. C then `execve()`s a setuid binary — and because the kernel consults `ptracer_cred`, which holds *B's* root credentials rather than those of C, the process that actually requested the relationship, it treats the ptrace relationship as privileged and does not suppress the setuid transition, so C ends up running at full root while still traced. Only afterward does B drop privileges and become dumpable, at which point A can `PTRACE_ATTACH` to B and drive root-privileged C through it. Two derivative Exploit-DB proof-of-concept tools (bcoles's automated helper-targeting version of Horn's original, tested across twenty-odd distributions, and a later, three-distribution modification of bcoles's by Ujas Dhami) automated exactly this polkit-helper technique, and Rapid7 shipped it as a [Metasploit module](https://raw.githubusercontent.com/rapid7/metasploit-framework/master/modules/exploits/linux/local/ptrace_traceme_pkexec_helper.rb) in October 2019. All three of these later tools test the same local-session precondition — an `$XDG_SESSION_ID` for a non-remote login (`loginctl … Remote=no`) — but only the Metasploit module acts on it: its `check` returns `CheckCode::Safe` when `loginctl` reports `Remote=yes`, which is why it documents that it "cannot be executed over ssh." The two C proof-of-concepts merely print a warning — and likewise for SELinux's `deny_ptrace` boolean, which only they test — because `check_env()`'s return value is discarded by `main()`. Yama's `kernel.yama.ptrace_scope = 3` would block the `PTRACE_TRACEME` outright — scope 2 rejects it only when the parent lacks `CAP_SYS_PTRACE`, which the root `pkexec` parent has — yet none of those three checks the sysctl at all; neither restriction is Linux's default, which is why the bug was exploitable out of the box on most desktop and server distributions of the era.
+悪用の窓は、特権を持つ親の生存期間のうち「rootである」と「もはやrootではない」の間の隙間である。Jann Hornの[Project Zeroへの元の報告](https://project-zero.issues.chromium.org/issues/42450993)（issue 1903）は、polkitの`pkexec`に対してそれを実証した。攻撃者プロセスAがBをforkする。Bは子Cをforkし、*その後で*`pkexec`を`execve()`するので、Cの実の親はrootとして動作していることになる。Cが`PTRACE_TRACEME`を呼ぶと、記録される`ptracer_cred`はrootを所有するBのスナップショットになる。次にCがsetuidバイナリを`execve()`する。カーネルは`ptracer_cred`を参照するが、そこにあるのは関係を実際に要求したプロセスであるCのものではなく*B*のrootクレデンシャルなので、カーネルはそのptrace関係を特権付きとして扱い、setuidの遷移を抑止しない。その結果、Cはトレースされたまま完全なrootとして動作することになる。その後でようやくBが特権を落としてdumpableになり、その時点でAはBに`PTRACE_ATTACH`し、Bを通じてroot特権のCを操ることができる。Exploit-DBにある2つの派生PoCツール（bcolesによる、Hornのオリジナルをヘルパーを自動で標的にするようにした版で、20余りのディストリビューションでテストされたもの、そして後にUjas Dhamiがbcolesの版を3つのディストリビューション向けに改変したもの）は、まさにこのpolkitヘルパーの手法を自動化した。Rapid7は2019年10月にそれを[Metasploitモジュール](https://raw.githubusercontent.com/rapid7/metasploit-framework/master/modules/exploits/linux/local/ptrace_traceme_pkexec_helper.rb)として出荷した。これら後発の3つのツールはいずれも同じローカルセッションの前提条件、つまりリモートでないログイン（`loginctl … Remote=no`）の`$XDG_SESSION_ID`をテストするが、それに基づいて動作を変えるのはMetasploitモジュールだけである。その`check`は`loginctl`が`Remote=yes`を報告すると`CheckCode::Safe`を返し、これが「cannot be executed over ssh」（ssh越しには実行できない）と文書化されている理由である。2つのC言語のPoCは警告を表示するだけである。それらだけがテストするSELinuxの`deny_ptrace`ブール値についても同様であり、`check_env()`の戻り値が`main()`で捨てられているからである。Yamaの`kernel.yama.ptrace_scope = 3`なら`PTRACE_TRACEME`を完全にブロックできる。スコープ2は親が`CAP_SYS_PTRACE`を持たない場合にだけそれを拒否するが、rootの`pkexec`の親はそれを持っている。しかし3つのツールのどれもそのsysctlを一切チェックしない。どちらの制限もLinuxのデフォルトではなく、それゆえこのバグは当時のほとんどのデスクトップおよびサーバーのディストリビューションで、そのままの状態で悪用可能だった。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The privilege half of this bug produced no crash, no memory corruption, no fuzzer-visible artifact — its only symptom is a permission decision coming out wrong. (A separate object-lifetime half of the same report is louder: Horn's other proof-of-concept races `setresuid()` against `PTRACE_TRACEME` and trips `put_cred_rcu()`'s panic.) A traced process could be manipulated (registers rewritten, `/proc/<pid>/mem` written, syscalls intercepted) by a "tracer" the kernel had marked privileged on the strength of credentials it never volunteered — and by the time the manipulation happened, the flesh-and-blood process behind that tracer role had dropped privileges via `setuid()`/`setgid()` and moved on to executing attacker-reachable code. NVD scores it CVSS 3.1 **7.8 HIGH** (`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`) — local, low complexity, low privileges required, full confidentiality/integrity/availability impact, because the end state is arbitrary code execution as root.
+このバグの特権に関わる半分は、クラッシュもメモリ破壊も、ファザーから見える痕跡も生まなかった。唯一の症状は、権限の判断が誤った結果になることである。（同じ報告のうち、オブジェクトの寿命に関わる別の半分はもっと騒がしい。Hornのもう1つのPoCは`setresuid()`と`PTRACE_TRACEME`を競合させ、`put_cred_rcu()`のパニックを引き起こす。）トレースされているプロセスは、カーネルが、そのプロセスが自ら差し出したわけではないクレデンシャルを根拠に特権付きとマークした「トレーサー」によって操作されえた（レジスタの書き換え、`/proc/<pid>/mem`への書き込み、システムコールの横取り）。そして操作が行われる頃には、そのトレーサー役の背後にある生身のプロセスは`setuid()`/`setgid()`で特権を落とし、攻撃者が到達可能なコードの実行に移っていた。NVDはこれをCVSS 3.1 **7.8 HIGH**（`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`）と評価している。ローカル、低い複雑さ、低い特権が必要、機密性・完全性・可用性への完全な影響であり、最終状態がrootとしての任意コード実行だからである。
 
-The bug had been present since Linux **4.10**, into which [`64b875f7ac8a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=64b875f7ac8a5d60a4e191479299e931ee949b67) — authored November 2016 — introduced `ptracer_cred` — nearly three years before Jann Horn's report. Distributions each caught up on their own schedule once the fix and CVE were public: Debian's DSA-4484 followed on July 20, Red Hat's RHSA-2019:2405 on August 7, and Ubuntu's five kernel advisories (USN-4093-1 through USN-4118-1, see External references) landed in two batches, August 13 and September 2 — a seven-week tail rather than a coordinated same-week release.
+このバグはLinux **4.10**から存在していた。2016年11月に作成された[`64b875f7ac8a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=64b875f7ac8a5d60a4e191479299e931ee949b67)が`ptracer_cred`を導入したのがこのバージョンであり、Jann Hornの報告のほぼ3年前である。修正とCVEが公開されると、各ディストリビューションはそれぞれのスケジュールで追随した。DebianのDSA-4484は7月20日、Red HatのRHSA-2019:2405は8月7日に続き、Ubuntuの5つのカーネルアドバイザリ（USN-4093-1からUSN-4118-1まで、外部参考資料を参照）は8月13日と9月2日の2回に分けて出た。同じ週の協調リリースではなく、7週間にわたる長い裾野だった。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The root cause is a **subject/object mismatch inside a two-caller helper function**. `ptrace_link()` was written to serve both `PTRACE_ATTACH` (where the caller and the tracer are the same process) and `PTRACE_TRACEME` (where they are not) with a single code path that assumed they always were. `__task_cred(new_parent)` is the correct credential source when `new_parent == current`; for `PTRACE_TRACEME` it silently picks the *wrong* subject — the parent, who isn't the one asking for anything — and nothing in the type system or the function's signature flagged that the assumption had been violated for one of its two call sites.
+根本原因は、**2つの呼び出し元を持つヘルパー関数の内部での主体と客体の取り違え**である。`ptrace_link()`は、`PTRACE_ATTACH`（呼び出し元とトレーサーが同じプロセス）と`PTRACE_TRACEME`（そうではない）の両方に、常に同じであると仮定した単一のコードパスで対応するように書かれていた。`__task_cred(new_parent)`は`new_parent == current`の場合には正しいクレデンシャルの源である。しかし`PTRACE_TRACEME`では、それは黙って*誤った*主体、つまり何も要求していない親を選んでしまう。そして型システムにも関数のシグネチャにも、2つの呼び出し箇所の一方でその仮定が破られていることを示すものは何もなかった。
 
-The commit that introduced `ptracer_cred`, `64b875f7ac8a`, was itself a security fix — it replaced the coarser `PT_PTRACE_CAP` bit specifically because that bit didn't distinguish *which* user namespace the tracer was capable in. Eric Biederman's message for that 2016 commit already flagged that the `PTRACE_TRACEME` path had been "overlooked" once before when `PT_PTRACE_CAP` was first added; the same call site went wrong a second time when the bit was replaced with a full credential pointer — this time not by being skipped but by being wired up with the wrong subject: `ptrace_link()`'s single credential source was correct in the common case (`PTRACE_ATTACH`) and silently wrong here.
+`ptracer_cred`を導入したコミット`64b875f7ac8a`自体がセキュリティ修正だった。より粗い`PT_PTRACE_CAP`ビットを置き換えたのは、まさにそのビットがトレーサーが*どの*ユーザー名前空間で特権を持っていたかを区別しなかったからである。Eric Biedermanはその2016年のコミットのメッセージで、`PT_PTRACE_CAP`が最初に追加されたときに`PTRACE_TRACEME`の経路が一度「overlooked」（見落とされた）ことをすでに指摘していた。ビットを完全なクレデンシャルポインタで置き換えたときに、同じ呼び出し箇所が二度目の誤りを犯した。今回は飛ばされたのではなく、誤った主体と結び付けられたのである。`ptrace_link()`の単一のクレデンシャルの源は、一般的なケース（`PTRACE_ATTACH`）では正しく、ここでは黙って誤っていた。
 
-The 2016 patch was [publicly reviewed](https://lore.kernel.org/lkml/87oa1eavfx.fsf_-_@xmission.com/) as part of a 3-patch series titled "Fixing ptrace vs exec vs userns interactions," and the review came within one question of the eventual bug — though aimed at a different line. Reviewing the `check_unsafe_exec()` hunk in `fs/exec.c` — the *consumer* of the new field, not the `ptrace_link()` capture site where the actual mismatch lived — Andy Lutomirski asked: "IIRC `PT_PTRACE_CAP` was added to prevent TOCTOU races. What prevents that type of race now? For that matter, what guarantees that we've already switched to new creds here and will continue to do so in the future?" Biederman's answer explained why the new field was safe *once populated*: "Because instead of capturing a single bit we now capture tracers entire credentials in `tsk->ptracer_cred`. As such `tsk->ptracer_cred` never changes except when ptracing begins or ends, and we remain safe for TOCTOU races." That answer is correct, and it is about *when* the credentials are captured; the neighboring question — *whose* credentials, for *which* caller — is what would have caught the `PTRACE_TRACEME` mismatch three years early. Nobody asked it. There's also a secondary, smaller bug the fix folds in: `ptrace_link()` obtained an RCU reference to the parent's credentials and then handed that pointer to `get_cred()` — and, in Jann Horn's own words from the fix's commit message, "the object lifetime rules for things like struct cred do not permit unconditionally turning an RCU reference into a stable reference" that way. That's a second reason the old code path was unsound, independent of whose credentials it was even reading.
+2016年のパッチは"Fixing ptrace vs exec vs userns interactions"と題された3パッチのシリーズの一部として[公開でレビューされ](https://lore.kernel.org/lkml/87oa1eavfx.fsf_-_@xmission.com/)、そのレビューは、別の行に向けられたものではあったが、後のバグまであと1つの質問というところまで迫っていた。`fs/exec.c`の`check_unsafe_exec()`のハンク、つまり実際の取り違えがあった`ptrace_link()`の取得箇所ではなく、新しいフィールドの*利用側*をレビューしていたAndy Lutomirskiは、次のように尋ねた:「IIRC `PT_PTRACE_CAP` was added to prevent TOCTOU races. What prevents that type of race now? For that matter, what guarantees that we've already switched to new creds here and will continue to do so in the future?」（訳: 記憶が正しければ、`PT_PTRACE_CAP`はTOCTOUの競合を防ぐために追加された。今は何がその種の競合を防いでいるのか？ ついでに言えば、ここですでに新しいクレデンシャルに切り替わっていて、将来もそうであり続けることを何が保証しているのか？）Biedermanの答えは、新しいフィールドが*いったん設定されれば*安全である理由を説明していた:「Because instead of capturing a single bit we now capture tracers entire credentials in `tsk->ptracer_cred`. As such `tsk->ptracer_cred` never changes except when ptracing begins or ends, and we remain safe for TOCTOU races.」（訳: 単一のビットを取得する代わりに、今はトレーサーのクレデンシャル全体を`tsk->ptracer_cred`に取得しているからだ。そのため`tsk->ptracer_cred`はptraceの開始時と終了時を除いて決して変わらず、TOCTOUの競合に対して安全なままである。）その答えは正しく、それはクレデンシャルが*いつ*取得されるかについてのものだった。隣にある問い、つまり*どの*呼び出し元について*誰の*クレデンシャルなのか、という問いこそが、`PTRACE_TRACEME`の取り違えを3年早く捕捉できたはずのものだった。誰もそれを問わなかった。修正が併せて取り込んでいる、二次的でより小さなバグもある。`ptrace_link()`は親のクレデンシャルへのRCU参照を取得し、そのポインタを`get_cred()`に渡していた。修正のコミットメッセージにおけるJann Horn自身の言葉によれば、「the object lifetime rules for things like struct cred do not permit unconditionally turning an RCU reference into a stable reference」（訳: struct credのようなもののオブジェクト寿命の規則は、RCU参照を無条件に安定した参照に変えることを許さない）。これは、誰のクレデンシャルを読んでいたかとは無関係に、古いコードパスが不健全だった2つ目の理由である。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-[`6994eefb0053`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6994eefb0053799d2e07cd140df6c2ea106c41ee) ("ptrace: Fix ->ptracer_cred handling for PTRACE_TRACEME"), authored by Jann Horn on July 4, 2019, collapses `ptrace_link()` to a single line:
+2019年7月4日にJann Hornが作成した[`6994eefb0053`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6994eefb0053799d2e07cd140df6c2ea106c41ee)（"ptrace: Fix ->ptracer_cred handling for PTRACE_TRACEME"）は、`ptrace_link()`を1行に縮める:
 
 ```c
 static void ptrace_link(struct task_struct *child, struct task_struct *new_parent)
@@ -131,46 +131,46 @@ static void ptrace_link(struct task_struct *child, struct task_struct *new_paren
 }
 ```
 
-`current_cred()` — the credentials of whichever process is actually executing the syscall that requests the ptrace relationship — replaces `__task_cred(new_parent)` unconditionally. For `PTRACE_ATTACH` this is a no-op, since `current` and `new_parent` were already the same process. For `PTRACE_TRACEME` it's the actual fix: the recorded credentials now belong to the child making the request, not the parent it's asking to be traced by, so a later privilege change in the parent can no longer retroactively upgrade a ptrace relationship the child itself established while unprivileged. It also sidesteps the RCU/`get_cred()` lifetime issue, since `current_cred()` needs no RCU dereference at all.
+`current_cred()`、つまりptrace関係を要求するシステムコールを実際に実行しているプロセスのクレデンシャルが、無条件に`__task_cred(new_parent)`を置き換える。`PTRACE_ATTACH`では、`current`と`new_parent`はすでに同じプロセスだったので、これは何も変えない。`PTRACE_TRACEME`では、これが本当の修正である。記録されるクレデンシャルは、トレースしてもらおうとしている親ではなく、要求している子のものになるので、後で親の特権が変化しても、子自身が非特権のときに確立したptrace関係が遡って格上げされることはもうない。また、`current_cred()`はRCU参照外しをまったく必要としないため、RCU/`get_cred()`の寿命の問題も回避される。
 
-The commit carries `Fixes: 64b875f7ac8a` and `Acked-by: Oleg Nesterov <oleg@redhat.com>` — Nesterov being one of ptrace's longtime maintainers — but **no `Link:` trailer**, and no pre-merge public LKML/lore.kernel.org review thread exists for this patch — its first appearance on a public list was July 8, as one patch in each of Greg Kroah-Hartman's five stable-review series, four days after the merge. It was handled privately and merged directly: Linus committed it to mainline on July 4, it shipped in the v5.2 release on July 7, and Jann Horn's Project Zero report went public on July 17 — the fix itself was in public git history nearly two weeks before the CVE and the distro advisories caught up to it.
+このコミットは`Fixes: 64b875f7ac8a`と`Acked-by: Oleg Nesterov <oleg@redhat.com>`を持つ（Nesterovはptraceの長年のメンテナの一人である）が、**`Link:`トレーラーはなく**、このパッチのマージ前の公開のLKML/lore.kernel.orgでのレビュースレッドは存在しない。公開リストへの初登場は7月8日で、マージの4日後に、Greg Kroah-Hartmanの5つのstableレビューシリーズのそれぞれに含まれる1パッチとしてだった。それは非公開で扱われ、直接マージされた。Linusは7月4日にメインラインにコミットし、7月7日のv5.2リリースで出荷され、Jann HornのProject Zeroの報告は7月17日に公開された。修正そのものは、CVEとディストリビューションのアドバイザリが追いつく2週間近く前に、公開のgit履歴に存在していたのである。
 
-The fix landed in mainline for 5.2 and was backported within a week to 5.1.17, 4.19.58, 4.14.133, 4.9.185, 4.4.185, and later 3.16.71 — a wide stable-tree spread reflecting how long-lived the bug was (present in mainline since 4.10, but `64b875f7ac8a` carried `Cc: stable`, so the vulnerable code reached the 4.4, 4.9 and 3.16 stable trees too).
+修正は5.2向けにメインラインに入り、1週間以内に5.1.17、4.19.58、4.14.133、4.9.185、4.4.185に、後に3.16.71にもバックポートされた。stableツリーへのこの広い展開は、バグがいかに長く存在していたかを反映している（メインラインには4.10から存在していたが、`64b875f7ac8a`には`Cc: stable`が付いていたため、脆弱なコードは4.4、4.9、3.16のstableツリーにも届いていた）。
 
 ```bash
-# Interim mitigation while unpatched: only scope 3 blocks PTRACE_TRACEME unconditionally
-sysctl -w kernel.yama.ptrace_scope=3    # 0/1 do not stop this bug (1 = Ubuntu/Debian default,
-                                        # restricts PTRACE_ATTACH only); 2 rejects TRACEME only
-                                        # when the parent lacks CAP_SYS_PTRACE. Setting 3 is irreversible
-                                        # until reboot; lower values can still be changed either way.
+# パッチ未適用時の暫定緩和策: PTRACE_TRACEMEを無条件にブロックするのはスコープ3のみ
+sysctl -w kernel.yama.ptrace_scope=3    # 0/1ではこのバグは止められない（1 = Ubuntu/Debianのデフォルト、
+                                        # PTRACE_ATTACHのみを制限）。2は親がCAP_SYS_PTRACEを持たない
+                                        # 場合にのみTRACEMEを拒否する。3の設定は再起動まで元に戻せない。
+                                        # それより低い値はどちらの方向にも変更可能。
 ```
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A helper function serving two call sites needs to name its actual precondition, not just satisfy the common case.** `ptrace_link()`'s bug is invisible if you only ever trace the `PTRACE_ATTACH` path; it only shows up once you ask "what does `new_parent` mean for the *other* caller?" — a question the function's own signature didn't prompt.
+**2つの呼び出し箇所に仕えるヘルパー関数は、一般的なケースを満たすだけでなく、実際の前提条件を明示する必要がある**。`ptrace_link()`のバグは、`PTRACE_ATTACH`の経路だけを追っている限り見えない。「*もう一方の*呼び出し元にとって`new_parent`は何を意味するのか？」と問うて初めて現れる。関数自身のシグネチャはその問いを促さなかった。
 
-**A call site that was wrong once deserves an audit, not just a fix.** The commit that introduced `ptracer_cred` explicitly noted that `PTRACE_TRACEME` had already been missed once, when `PT_PTRACE_CAP` was first added, fifteen years earlier. The 2016 rewrite closed that gap and reopened it from the other side, recording credentials for `PTRACE_TRACEME` at last — but the wrong process's. Repairing a known-fragile call site is not the same as auditing it.
+**一度誤った呼び出し箇所には、修正だけでなく監査がふさわしい**。`ptracer_cred`を導入したコミットは、15年前に`PT_PTRACE_CAP`が最初に追加されたとき、`PTRACE_TRACEME`がすでに一度見落とされていたことを明記していた。2016年の書き換えはその隙間を閉じ、反対側から再び開いた。ついに`PTRACE_TRACEME`のクレデンシャルを記録するようになったが、それは誤ったプロセスのものだった。脆いことが分かっている呼び出し箇所を修理することは、それを監査することと同じではない。
 
-**Credentials must be captured from the requester, never inferred from a related process.** `current_cred()` is always the right subject for an access-control decision triggered by `current`'s own syscall; reaching across to a different task_struct for "whoever seems relevant" reintroduces exactly the kind of confused-deputy gap this bug exploited.
+**クレデンシャルは要求者から取得しなければならず、関連するプロセスから推測してはならない**。`current`自身のシステムコールが引き起こすアクセス制御の判断において、`current_cred()`は常に正しい主体である。「関係がありそうな誰か」のために別のtask_structへ手を伸ばすことは、このバグが悪用した、まさにその種の混乱した代理人（confused deputy）の隙間を再び持ち込む。
 
-**A privilege-dropping pattern (`setuid()` then `execve()`) is only as safe as every relationship formed before the drop.** Ptrace isn't the only such relationship — open file descriptors, pending signals, and namespace membership all cross the same boundary — but this bug is a concrete case of one specific relationship silently carrying stale privilege forward across a drop that was supposed to end it.
+**特権放棄のパターン（`setuid()`の後に`execve()`）は、放棄の前に形成されたすべての関係と同程度にしか安全ではない**。そのような関係はptraceだけではない。開いているファイルディスクリプタ、保留中のシグナル、名前空間の所属もすべて同じ境界をまたぐ。しかしこのバグは、ある特定の関係が、それを終わらせるはずだった放棄をまたいで、古い特権を黙って持ち越した具体的な事例である。
 
-!!! warning "Pattern to watch for"
-    Any kernel object that snapshots "how privileged was the *other* party in this relationship at creation time" needs to record the credentials of the process making the request, not a related process picked for convenience — and needs a test for every distinct calling convention of the code that populates it, not just the most common one.
+!!! warning "注意すべきパターン"
+    「この関係の*相手側*が作成時にどれだけの特権を持っていたか」をスナップショットするカーネルオブジェクトはすべて、都合で選んだ関連プロセスではなく、要求を行っているプロセスのクレデンシャルを記録する必要がある。また、それを設定するコードの、最も一般的なものだけでなく、異なる呼び出し規約のそれぞれについてテストが必要である。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Credentials and User Namespaces](../credentials.md) — `struct cred`, its copy-on-write discipline, and what happens to credentials across `execve()`
-- [Linux Capabilities](../capabilities.md) — the privilege-dropping pattern (`setuid()` then `execve()`) this bug undermined
-- [Nested User Namespace UID/GID Mapping](nested-userns-uid-mapping.md) — another Jann Horn-reported credential/identity bug in the same era
+- [クレデンシャルとユーザー名前空間](../credentials.md) — `struct cred`、そのコピーオンライトの規律、そして`execve()`をまたいでクレデンシャルに何が起きるか
+- [Linuxケイパビリティ](../capabilities.md) — このバグが損なった特権放棄のパターン（`setuid()`の後に`execve()`）
+- [入れ子のユーザー名前空間におけるUID/GIDマッピング](nested-userns-uid-mapping.md) — 同時期にJann Hornが報告した、別のクレデンシャル／アイデンティティのバグ
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [NVD: CVE-2019-13272](https://nvd.nist.gov/vuln/detail/CVE-2019-13272) — CVSS 3.1 7.8 HIGH, published July 17, 2019
+- [NVD: CVE-2019-13272](https://nvd.nist.gov/vuln/detail/CVE-2019-13272) — CVSS 3.1 7.8 HIGH、2019年7月17日公開
 - [git.kernel.org: 6994eefb0053](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6994eefb0053799d2e07cd140df6c2ea106c41ee) — "ptrace: Fix ->ptracer_cred handling for PTRACE_TRACEME"
-- [git.kernel.org: 64b875f7ac8a](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=64b875f7ac8a5d60a4e191479299e931ee949b67) — "ptrace: Capture the ptracer's creds not PT_PTRACE_CAP" (2016), the commit whose `PTRACE_TRACEME` handling this bug's fix corrected
-- [lore.kernel.org: Fixing ptrace vs exec vs userns interactions](https://lore.kernel.org/lkml/87oa1eavfx.fsf_-_@xmission.com/) — the 2016 review thread, including Andy Lutomirski's TOCTOU question and Eric Biederman's answer
-- [Google Project Zero: Issue 1903](https://project-zero.issues.chromium.org/issues/42450993) — Jann Horn's original report, including the polkit `pkexec` exploitation path (formerly `bugs.chromium.org/p/project-zero/issues/detail?id=1903`)
-- [Exploit-DB 47133](https://www.exploit-db.com/exploits/47133), [47163](https://www.exploit-db.com/exploits/47163), [50541](https://www.exploit-db.com/exploits/50541) — Horn's original report and PoC (47133), plus two derivatives: bcoles's automated helper-targeting version of it (47163, 2019-07-24) and Ujas Dhami's modification of bcoles's (50541, 2021-11-23)
-- [Rapid7 Metasploit module: ptrace_traceme_pkexec_helper](https://raw.githubusercontent.com/rapid7/metasploit-framework/master/modules/exploits/linux/local/ptrace_traceme_pkexec_helper.rb) — Exploit-DB 47543, October 2019
-- [Debian DSA-4484](https://www.debian.org/security/2019/dsa-4484), [Ubuntu USN-4093-1](https://usn.ubuntu.com/4093-1/) (and USN-4094-1, 4095-1, 4117-1, 4118-1), [Red Hat RHSA-2019:2405](https://access.redhat.com/errata/RHSA-2019:2405) — representative downstream vendor advisories, July–September 2019
+- [git.kernel.org: 64b875f7ac8a](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=64b875f7ac8a5d60a4e191479299e931ee949b67) — "ptrace: Capture the ptracer's creds not PT_PTRACE_CAP"（2016年）。このバグの修正が訂正した`PTRACE_TRACEME`の処理を持っていたコミット
+- [lore.kernel.org: Fixing ptrace vs exec vs userns interactions](https://lore.kernel.org/lkml/87oa1eavfx.fsf_-_@xmission.com/) — 2016年のレビュースレッド。Andy LutomirskiのTOCTOUに関する質問とEric Biedermanの回答を含む
+- [Google Project Zero: Issue 1903](https://project-zero.issues.chromium.org/issues/42450993) — Jann Hornによる元の報告。polkitの`pkexec`を使った悪用経路を含む（旧URLは`bugs.chromium.org/p/project-zero/issues/detail?id=1903`）
+- [Exploit-DB 47133](https://www.exploit-db.com/exploits/47133)、[47163](https://www.exploit-db.com/exploits/47163)、[50541](https://www.exploit-db.com/exploits/50541) — Hornの元の報告とPoC（47133）、および2つの派生版。bcolesによる、ヘルパーを自動で標的にする版（47163、2019-07-24）と、Ujas Dhamiによるbcoles版の改変（50541、2021-11-23）
+- [Rapid7 Metasploitモジュール: ptrace_traceme_pkexec_helper](https://raw.githubusercontent.com/rapid7/metasploit-framework/master/modules/exploits/linux/local/ptrace_traceme_pkexec_helper.rb) — Exploit-DB 47543、2019年10月
+- [Debian DSA-4484](https://www.debian.org/security/2019/dsa-4484)、[Ubuntu USN-4093-1](https://usn.ubuntu.com/4093-1/)（およびUSN-4094-1、4095-1、4117-1、4118-1）、[Red Hat RHSA-2019:2405](https://access.redhat.com/errata/RHSA-2019:2405) — 代表的な下流ベンダーのアドバイザリ、2019年7〜9月

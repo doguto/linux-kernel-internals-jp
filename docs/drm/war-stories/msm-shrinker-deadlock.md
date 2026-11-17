@@ -1,36 +1,36 @@
-# The msm GPU Recovery/Shrinker Deadlock {#the-msm-gpu-recoveryshrinker-deadlock}
+# msm GPUの回復処理とshrinkerのデッドロック {#the-msm-gpu-recoveryshrinker-deadlock}
 
-> A hung-GPU recovery worker allocated memory while holding the very lock the job-running thread needed, and that allocation triggered a shrinker that waited on the fences the stuck job would have signaled
+> ハングしたGPUの回復ワーカーが、ジョブ実行スレッドが必要とするまさにそのロックを保持したままメモリを割り当て、その割り当てが、止まったジョブがシグナルするはずだったフェンスを待つshrinkerを起動した
 
-Landed
-:   April 2026 (Linux 7.1)
+収録
+:   2026年4月（Linux 7.1）
 
-Driver
-:   msm (Qualcomm Adreno)
+ドライバ
+:   msm（Qualcomm Adreno）
 
-Author
-:   Sergey Senozhatsky (Google/ChromeOS)
+作者
+:   Sergey Senozhatsky（Google/ChromeOS）
 
-Fixed in
+修正
 :   [`4625fe5bbdac`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4625fe5bbdaccd45be274c30ff0a42e30d4e38cf)
 
-Not a CVE
+CVEではない
 
-*Part of [War Stories: GPU/DRM Bugs and Regressions](../war-stories.md).*
+*[事件簿: GPU/DRMのバグとリグレッション](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-[Command Submission, `dma_fence`, and the GPU Scheduler](../command-submission.md) documents the cross-driver `dma_fence` signaling contract: because `dma_fence` waits are load-bearing all the way down into memory reclaim — the page allocator itself can end up waiting on a GPU fence to make forward progress — code that could block a fence signal "must not take a `dma_resv` lock, must not allocate with `GFP_KERNEL`, and must not allocate with `GFP_NOFS`/`GFP_NOIO` either," in that page's words. This incident is a variant of the same hazard one level removed: not an allocation directly on the signaling path, but an allocation made while holding a lock the signaling thread itself needed.
+[コマンド投入、`dma_fence`、GPUスケジューラ](../command-submission.md)では、ドライバ横断の `dma_fence` シグナル契約を説明している。`dma_fence` の待機はメモリ回収の奥深くまで重要な役割を担っており、ページアロケータ自体が前進するためにGPUのフェンスを待つことになりうる。そのため、フェンスのシグナルをブロックしうるコードは、そのページの言葉を借りれば「`dma_resv` ロックを取ってはならず、`GFP_KERNEL` で割り当ててはならず、`GFP_NOFS`/`GFP_NOIO` で割り当ててもならない」。この事件は同じ危険の一段離れた変種である。シグナルパス上で直接割り当てるのではなく、シグナルするスレッド自身が必要とするロックを保持したまま割り当てを行ったのである。
 
-msm's GPU hangcheck mechanism detects a stuck ring by comparing the fence the GPU last completed against the fence it was last asked to submit. When hangcheck fires, a recovery worker takes `gpu->lock`, captures a crash-state dump for debugging, and attempts to reset and restart the ring.
+msmのGPU hangcheck機構は、GPUが最後に完了したフェンスと、最後に投入を求められたフェンスを比較することで、止まったリングを検出する。hangcheckが発火すると、回復ワーカーは `gpu->lock` を取得し、デバッグ用のクラッシュ状態ダンプを取得し、リングのリセットと再起動を試みる。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Capturing that crash-state dump calls `kvmalloc_node()` to allocate the dump buffer — a plain kernel allocation, made while still holding `gpu->lock`. Under enough memory pressure, that allocation entered direct reclaim, which invoked msm's own GEM shrinker (`msm_gem_shrinker_scan()`), which in turn called `drm_gem_lru_scan()` → `active_purge()`, which waits on `dma_resv_wait_timeout()` for outstanding fences to signal before it can reclaim their pages.
+そのクラッシュ状態ダンプの取得では、ダンプバッファを割り当てるために `kvmalloc_node()` を呼ぶ。これは `gpu->lock` を保持したまま行われる素のカーネル割り当てである。十分なメモリプレッシャーの下では、その割り当てが直接回収に入り、msm自身のGEM shrinker（`msm_gem_shrinker_scan()`）を呼び出し、それがさらに `drm_gem_lru_scan()` → `active_purge()` を呼んだ。`active_purge()` は、未完了のフェンスのページを回収する前に、それらがシグナルされるのを `dma_resv_wait_timeout()` で待つ。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-Sergey Senozhatsky's fix commit quotes the actual symptom directly from a device stuck in this state — repeated hangcheck firings that never resolved:
+Sergey Senozhatskyの修正コミットは、この状態で止まったデバイスから実際の症状を直接引用している。hangcheckが繰り返し発火し、決して解消しなかった。
 
 ```
 [..]
@@ -43,7 +43,7 @@ msm_dpu ae01000.display-controller: [drm:hangcheck_handler] *ERROR* (IPv4: 1): s
 [..]
 ```
 
-The commit message also includes the hung-task dump for both blocked threads. The job-running kernel thread, blocked over two minutes on the mutex the recovery worker held:
+コミットメッセージには、ブロックされた両方のスレッドのhung-taskダンプも含まれている。ジョブ実行のカーネルスレッドは、回復ワーカーが保持するmutexで2分以上ブロックされていた。
 
 ```
 INFO: task ring0:155 blocked for more than 122 seconds.
@@ -58,7 +58,7 @@ drm_sched_main+0x514/0x938
 ...
 ```
 
-And the recovery worker, itself blocked waiting on a fence inside memory reclaim, while still holding that same mutex:
+そして回復ワーカー自身は、その同じmutexを保持したまま、メモリ回収の中でフェンスを待ってブロックされていた。
 
 ```
 ...
@@ -80,31 +80,31 @@ recover_worker+0x1c0/0x638
 ...
 ```
 
-The cycle closes exactly the way the `dma_fence` contract warns against: the job thread needed `gpu->lock` to make progress and signal its fence; the recovery worker held `gpu->lock` and needed that same fence (via the shrinker's reclaim wait) to finish its allocation and release the lock. Neither side could proceed. "So no one can make any further progress," in the commit's own words.
+循環は、`dma_fence` 契約が警告しているとおりの形で閉じる。ジョブスレッドは前進してフェンスをシグナルするために `gpu->lock` を必要とした。回復ワーカーは `gpu->lock` を保持しており、割り当てを終えてロックを解放するために（shrinkerの回収待ちを通じて）その同じフェンスを必要とした。どちらの側も進めなかった。コミット自身の言葉では "So no one can make any further progress"（訳: そのため誰もそれ以上前進できない）である。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The crash-dump allocation was ordinary code, written without any thought to `dma_fence` or reclaim, because on its face `msm_gpu_crashstate_capture()` has nothing to do with fences — it's diagnostic tooling, not the fast path. The danger was entirely in what that allocation could transitively trigger under memory pressure: reclaim, into the GPU's own shrinker, into a fence wait — while the allocating thread's own held lock was exactly what the thread that would signal that fence needed to proceed. Nothing about the allocation call site looks unsafe in isolation; the hazard is only visible in the reachable call graph under load, which is why the cross-driver `dma_fence` contract calls out reclaim-adjacent allocation explicitly rather than leaving it to be rediscovered per driver.
+クラッシュダンプの割り当ては、`dma_fence` やメモリ回収のことをまったく考えずに書かれた普通のコードだった。表面上、`msm_gpu_crashstate_capture()` はフェンスとは何の関係もないからである。これは診断用のツールであり、高速パスではない。危険はもっぱら、その割り当てがメモリプレッシャーの下で推移的に引き起こしうることにあった。メモリ回収、そこからGPU自身のshrinker、そこからフェンスの待機へと至るが、その間、割り当てを行うスレッド自身が保持しているロックこそが、そのフェンスをシグナルするはずのスレッドが前進するために必要としていたものだった。割り当ての呼び出し箇所を単独で見ても、危険に見えるところは何もない。危険は負荷下で到達可能なコールグラフの中でしか見えない。だからこそドライバ横断の `dma_fence` 契約は、ドライバごとに再発見されるのに任せず、メモリ回収に関わる割り当てを明示的に取り上げているのである。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`4625fe5bbdac` ("drm: gpu: msm: forbid mem reclaim from reset") forbids the recover/fault worker from entering memory reclaim while holding `gpu->lock`, breaking the cycle at the allocation rather than at the locking or the shrinker. Reviewed by Rob Clark, msm's maintainer.
+`4625fe5bbdac`（"drm: gpu: msm: forbid mem reclaim from reset"）は、recover/faultワーカーが `gpu->lock` を保持したままメモリ回収に入ることを禁止し、ロックやshrinkerではなく割り当ての時点で循環を断ち切る。msmのメンテナであるRob Clarkがレビューした。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A lock held across an allocation can create a `dma_fence` deadlock even when the allocating code never touches a fence directly.** `msm_gpu_crashstate_capture()` doesn't call any `dma_fence` API. The deadlock came from what its allocation could trigger — reclaim, into the driver's own shrinker — while the lock it ran under blocked the one thread that could have unblocked that reclaim by signaling its fence.
+**割り当てをまたいで保持されたロックは、割り当てを行うコードがフェンスに直接触れなくても、`dma_fence` のデッドロックを生みうる。** `msm_gpu_crashstate_capture()` はどの `dma_fence` APIも呼ばない。デッドロックは、その割り当てが引き起こしうるもの（メモリ回収、そこからドライバ自身のshrinker）から生じた。その間、それが保持していたロックは、フェンスをシグナルすることでその回収のブロックを解けた唯一のスレッドをブロックしていた。
 
-**Diagnostic/error-handling code paths are exactly where this rule gets missed**, because they're written to run *after* something has already gone wrong, under the assumption that correctness matters more than performance there — which is true, but doesn't exempt them from the locking and allocation constraints of the code they're recovering.
+**診断／エラー処理のコードパスこそ、この規則が見落とされる場所である。** それらは何かがすでにおかしくなった*後に*実行されるよう書かれており、そこでは性能より正しさが重要だという前提がある。それは正しいが、回復しようとしている対象のコードのロックと割り当ての制約から免除されるわけではない。
 
-!!! warning "Pattern to watch for"
-    Any allocation made while holding a lock that a job-completion or fence-signaling path also needs is a potential reclaim-triggered deadlock, even if the allocating code has no direct connection to fences. Trace what the allocation can transitively trigger (shrinkers, reclaim, other drivers' GEM/TTM shrinkers) under memory pressure, not just what it does in the common case.
+!!! warning "注意すべきパターン"
+    ジョブ完了やフェンスシグナルのパスも必要とするロックを保持したまま行う割り当ては、割り当てを行うコードがフェンスと直接の関係を持っていなくても、メモリ回収によって引き起こされるデッドロックの候補である。割り当てが通常のケースで何をするかだけでなく、メモリプレッシャーの下で推移的に何を引き起こしうるか（shrinker、メモリ回収、他ドライバのGEM/TTM shrinker）を追跡すること。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Command Submission, `dma_fence`, and the GPU Scheduler](../command-submission.md) — the `dma_fence` cross-driver signaling contract this bug violated
-- [GEM Buffer Objects and dma-buf Sharing](../gem-dmabuf.md) — GEM shrinkers and the `dma_resv` fence lists they interact with
-- [The Xe TDR Recovery Regression Chain](xe-tdr-recovery-regression.md) — a different driver's recovery-path bug, in the same TDR/hangcheck family
+- [コマンド投入、`dma_fence`、GPUスケジューラ](../command-submission.md) — このバグが違反した、ドライバ横断の `dma_fence` シグナル契約
+- [GEMバッファオブジェクトとdma-bufの共有](../gem-dmabuf.md) — GEM shrinkerと、それが相互作用する `dma_resv` のフェンスリスト
+- [Xe TDR回復のリグレッション連鎖](xe-tdr-recovery-regression.md) — 同じTDR/hangcheck系統における、別のドライバの回復パスのバグ
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: 4625fe5bbdac](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4625fe5bbdaccd45be274c30ff0a42e30d4e38cf) — "drm: gpu: msm: forbid mem reclaim from reset," including both hung-task traces
+- [git.kernel.org: 4625fe5bbdac](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4625fe5bbdaccd45be274c30ff0a42e30d4e38cf) — "drm: gpu: msm: forbid mem reclaim from reset"、両方のhung-taskトレースを含む

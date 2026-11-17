@@ -1,60 +1,60 @@
-# The TCP Challenge-ACK Side Channel {#the-tcp-challenge-ack-side-channel}
+# TCP Challenge-ACKサイドチャネル {#the-tcp-challenge-ack-side-channel}
 
-> CVE-2016-5696 — a global rate-limit counter meant as an internal implementation detail became an off-path attacker's window into a victim's TCP connections
+> CVE-2016-5696 — 内部の実装詳細のつもりだったグローバルなレート制限カウンタが、オフパス攻撃者にとって被害者のTCPコネクションを覗く窓になった
 
-Disclosed
-:   August 2016
+公開
+:   2016年8月
 
-Reported by
-:   Yue Cao, Zhiyun Qian, et al. (UC Riverside, with Lisa Marvel, US Army Research Laboratory)
+報告者
+:   Yue Cao, Zhiyun Qian, et al.（UC Riverside、US Army Research LaboratoryのLisa Marvelと共同）
 
 CVSS
 :   4.8 MEDIUM
 
-Fixed in
-:   mainline 4.7
+修正バージョン
+:   メインライン 4.7
 
-Exploit tool
-:   yes ([`mountain_goat`](https://github.com/Gnoxter/mountain_goat) PoC)
+エクスプロイトツール
+:   あり（[`mountain_goat`](https://github.com/Gnoxter/mountain_goat) PoC）
 
-Actively exploited
-:   no confirmed cases (not on CISA KEV)
+実際の悪用
+:   確認された事例なし（CISA KEVに未掲載）
 
-*Part of [War Stories: Network Stack Bugs and CVEs](../war-stories.md).*
+*[事件簿: ネットワークスタックのバグとCVE](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 発生前の状態 {#before-state}
 
-RFC 5961 hardens TCP against blind in-window packet injection: instead of silently accepting or resetting a connection when a spoofed SYN or RST with an in-window (but not exactly-right) sequence number arrives, the receiver sends a **challenge ACK** — carrying the *exact* next-expected sequence number — and waits for the real peer to either confirm or ignore it. This forces an off-path attacker (one who can't see the traffic) to guess the exact sequence number, not just land within the receive window, which is a much harder problem.
+RFC 5961は、ブラインドなウィンドウ内パケット注入に対してTCPを強化する。ウィンドウ内の（ただし正確に正しいわけではない）シーケンス番号を持つ偽装SYNやRSTが届いたとき、黙って受け入れたりコネクションをリセットしたりする代わりに、受信側は**challenge ACK**を送る。これは*正確な*次の期待シーケンス番号を運ぶもので、受信側は本物のピアがそれを確認するか無視するかを待つ。これにより、オフパス攻撃者（トラフィックを見られない攻撃者）は受信ウィンドウ内に収めるだけでなく正確なシーケンス番号を推測しなければならなくなり、これははるかに難しい問題である。
 
-Because challenge ACKs consume resources and RFC 5961 expected them to be rare, Linux rate-limited them with a single **global counter**, `challenge_count`, reset once per second and capped by `sysctl_tcp_challenge_ack_limit` (default 100/second), in `tcp_send_challenge_ack()` in `net/ipv4/tcp_input.c`.
+challenge ACKはリソースを消費し、RFC 5961はそれがまれにしか発生しないと想定していたため、Linuxはそれを単一の**グローバルカウンタ**`challenge_count`でレート制限していた。このカウンタは1秒に1回リセットされ、`sysctl_tcp_challenge_ack_limit`（デフォルトは100/秒）で上限が設けられており、`net/ipv4/tcp_input.c`の`tcp_send_challenge_ack()`にあった。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Yue Cao and colleagues at UC Riverside (with Lisa Marvel from the US Army Research Laboratory) found that the shared, global nature of that counter turned it into a **side channel**. An off-path attacker can:
+UC RiversideのYue Caoらは（US Army Research LaboratoryのLisa Marvelと共同で）、このカウンタが共有されたグローバルなものであるという性質が、それを**サイドチャネル**に変えてしまうことを発見した。オフパス攻撃者は次のことができる。
 
-1. Send a burst of spoofed RST/SYN packets designed to provoke the maximum number of challenge ACKs against a victim connection they're trying to identify or hijack.
-2. Simultaneously send probe traffic on their own, legitimate connection to the same server.
-3. Count how many challenge ACKs *their own* connection received back. If the count is short of the expected maximum, some of the global quota was consumed by challenge ACKs sent to the victim — meaning the attacker's spoofed guess landed in-window (or matched a live connection at all).
+1. 特定またはハイジャックしようとしている被害者コネクションに対して、challenge ACKを最大数引き起こすように設計した偽装RST/SYNパケットのバーストを送る。
+2. 同時に、同じサーバーへの自分自身の正当なコネクション上でプローブトラフィックを送る。
+3. *自分自身の*コネクションが受け取ったchallenge ACKの数を数える。数が期待される最大値に届かなければ、グローバルな割り当て枠の一部が被害者に送られたchallenge ACKによって消費されたことになる。つまり、攻撃者の偽装した推測がウィンドウ内に入った（あるいはそもそも生きているコネクションと一致した）ということである。
 
-By repeating this with different guesses, the attacker narrows in on whether a given four-tuple represents a live connection, and eventually on the in-window sequence number — all **without ever seeing a single packet of the real conversation**.
+異なる推測でこれを繰り返すことで、攻撃者は与えられた4タプルが生きているコネクションを表すかどうかを絞り込み、最終的にはウィンドウ内のシーケンス番号まで絞り込む。そのすべてを、**本物の通信のパケットを一つも見ることなく**行える。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-LWN's coverage (["The TCP 'challenge ACK' side channel", August 2016](https://lwn.net/Articles/696868/)) summarized the paper's results: "it takes only 10 seconds to successfully infer whether they are communicating. If there is a connection, subsequently, it takes also only tens of seconds to infer the TCP sequence numbers."
+LWNの記事（["The TCP 'challenge ACK' side channel", August 2016](https://lwn.net/Articles/696868/)）は論文の結果を次のようにまとめた: "it takes only 10 seconds to successfully infer whether they are communicating. If there is a connection, subsequently, it takes also only tens of seconds to infer the TCP sequence numbers."（訳: 通信しているかどうかの推定に成功するまでわずか10秒しかかからない。コネクションが存在すれば、その後TCPシーケンス番号を推定するのにもわずか数十秒しかかからない。）
 
-The researchers demonstrated both blind connection reset (against SSH and Tor connections) and, more seriously, blind data injection into long-lived connections such as video streams — including injecting attacker-controlled JavaScript into an unencrypted web session. The paper was presented at USENIX Security 2016.
+研究者らは、ブラインドなコネクションリセット（SSHやTorのコネクションに対して）と、より深刻なものとして、動画ストリームのような長寿命コネクションへのブラインドなデータ注入の両方を実証した。これには、暗号化されていないWebセッションへの攻撃者が制御するJavaScriptの注入も含まれる。この論文はUSENIX Security 2016で発表された。
 
-The technique didn't stay confined to the paper: a standalone proof-of-concept tool, [`mountain_goat`](https://github.com/Gnoxter/mountain_goat), was published separately implementing the off-path inference attack. As with the other locally-weaponized bugs on this page, there's no public record of it being caught in active exploitation against real targets — no CISA KEV listing, no confirmed incident report — but the side channel was demonstrably practical to exploit, not just theoretically real.
+この手法は論文の中だけにとどまらなかった。オフパス推定攻撃を実装したスタンドアロンの概念実証ツール[`mountain_goat`](https://github.com/Gnoxter/mountain_goat)が別途公開された。このページの他のローカルで武器化されたバグと同様に、実際の標的に対する能動的な悪用で捕捉されたという公開記録はない（CISA KEVへの掲載も、確認されたインシデント報告もない）が、このサイドチャネルは理論上存在するだけでなく、実際に悪用可能であることが実証されていた。
 
-Because Linux was, at the time, the only major OS to faithfully implement RFC 5961's challenge-ACK behavior, it was also the only one vulnerable to this specific side channel.
+当時、LinuxはRFC 5961のchallenge-ACKの挙動を忠実に実装した唯一の主要OSであったため、この特定のサイドチャネルに対して脆弱な唯一のOSでもあった。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The root cause is a classic shared-resource side channel: a single global counter meant to be an internal implementation detail (a rate limit) became an externally observable signal once an attacker could both *consume* the shared quota and *measure* its depletion from a different vantage point. RFC 5961 itself recommended the rate limit but didn't anticipate that the limit's exact, predictable, low value (100/second) combined with a hard reset boundary (once per second) would make the counter cheap to exhaust and easy to observe.
+根本原因は、典型的な共有リソースのサイドチャネルである。内部の実装詳細（レート制限）のつもりだった単一のグローバルカウンタが、攻撃者が共有の割り当て枠を*消費*し、かつ別の視点からその枯渇を*測定*できるようになった時点で、外部から観測可能なシグナルになった。RFC 5961自体はレート制限を推奨していたが、制限値が正確で予測可能な低い値（100/秒）であり、それが厳格なリセット境界（1秒に1回）と組み合わさることで、カウンタを安価に枯渇させ容易に観測できるようになることまでは想定していなかった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-[`75ff39ccc1bd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=75ff39ccc1bd5d3c455b6822ab09e533c551f758) ("tcp: make challenge acks less predictable"), based on analysis from Linus Torvalds, made two changes: it raised the default limit from 100 to 1000 challenge ACKs/second (`sysctl_tcp_challenge_ack_limit`), and it **randomized** how the per-second quota is consumed. Rather than counting up from zero and comparing to a fixed limit, it initializes `challenge_count` each second to a random value between half and one-and-a-half times the limit, and counts *down*, so an attacker can no longer cheaply determine how much quota remains:
+[`75ff39ccc1bd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=75ff39ccc1bd5d3c455b6822ab09e533c551f758)（"tcp: make challenge acks less predictable"）は、Linus Torvaldsの分析に基づき、2つの変更を行った。デフォルトの制限を100から1000 challenge ACK/秒（`sysctl_tcp_challenge_ack_limit`）に引き上げ、さらに1秒ごとの割り当て枠の消費方法を**ランダム化**した。ゼロから数え上げて固定の制限と比較する代わりに、毎秒`challenge_count`を制限値の0.5倍から1.5倍の間のランダムな値で初期化し、*カウントダウン*するようにした。これにより、攻撃者は残りの割り当て枠がどれだけあるかを安価に判断できなくなった。
 
 ```c
 u32 half = (sysctl_tcp_challenge_ack_limit + 1) >> 1;
@@ -62,33 +62,33 @@ challenge_timestamp = now;
 WRITE_ONCE(challenge_count, half + prandom_u32_max(sysctl_tcp_challenge_ack_limit));
 ```
 
-The fix landed in mainline for 4.7. Existing per-socket rate limiting (`tcp_oow_rate_limited()`) was left in place; Jason Baron (Akamai) followed up a few days later with [`083ae308280d`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=083ae308280d13d187512b9babe3454342a7987e) ("tcp: enable per-socket rate limiting of all 'challenge acks'"), explicitly [framed as a step toward eventually removing the global limit](https://lore.kernel.org/netdev/1468510720-322-1-git-send-email-jbaron@akamai.com/) altogether, "as Eric Dumazet has suggested." Operators on kernels without the fix had a documented interim mitigation: raise `net.ipv4.tcp_challenge_ack_limit` to a very large value (e.g. `999999999`) to make the counter effectively unlimited and therefore uninformative to an attacker.
+この修正は4.7でメインラインに入った。既存のソケット単位のレート制限（`tcp_oow_rate_limited()`）はそのまま残された。Jason Baron（Akamai）は数日後に[`083ae308280d`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=083ae308280d13d187512b9babe3454342a7987e)（"tcp: enable per-socket rate limiting of all 'challenge acks'"）で追従した。これは、"as Eric Dumazet has suggested"（Eric Dumazetが提案したように）、最終的にグローバル制限を完全に取り除くための一歩として[明示的に位置づけられていた](https://lore.kernel.org/netdev/1468510720-322-1-git-send-email-jbaron@akamai.com/)。修正のないカーネルを使う運用者には、文書化された暫定的な緩和策があった。`net.ipv4.tcp_challenge_ack_limit`を非常に大きな値（例: `999999999`）に引き上げ、カウンタを実質的に無制限にし、それによって攻撃者にとって情報を与えないものにするというものである。
 
-The fix went through a real back-and-forth with Yue Cao on netdev before landing. Dumazet's [first posting](https://lore.kernel.org/netdev/1467995586.30694.34.camel@edumazet-glaptop3.roam.corp.google.com/) only randomized the per-second *reset boundary* (a window between 0.5s and 1.5s); Cao replied that his attack could adapt by sending a short burst reliably contained within one window and repeating the guess to resolve edge cases — which is what prompted the ["v2" patch](https://lore.kernel.org/netdev/1468137842.30694.58.camel@edumazet-glaptop3.roam.corp.google.com/) that randomizes the *count* instead, the version that shipped.
+この修正は、マージされるまでにnetdev上でYue Caoと実際にやり取りを重ねた。Dumazetの[最初の投稿](https://lore.kernel.org/netdev/1467995586.30694.34.camel@edumazet-glaptop3.roam.corp.google.com/)は、1秒ごとの*リセット境界*（0.5秒から1.5秒の間のウィンドウ）をランダム化するだけだった。Caoは、1つのウィンドウ内に確実に収まる短いバーストを送り、境界ケースを解決するために推測を繰り返すことで攻撃を適応させられると返信した。これがきっかけとなって、代わりに*カウント*をランダム化する["v2"パッチ](https://lore.kernel.org/netdev/1468137842.30694.58.camel@edumazet-glaptop3.roam.corp.google.com/)が生まれ、それが出荷されたバージョンとなった。
 
-Cao then described a further refinement of his attack against v2 (sending well over 1,000 probes and using the number of returned challenge ACKs to infer a correct guess) and asked whether the global limit should simply be removed, noting that neither FreeBSD nor Windows enforced one. Dumazet's reply explained why the kernel kept it anyway: the limit exists to blunt the "ACK storms" caused by "buggy firewalls and appliances" that plagued servers before rate limiting was added in 3.6. He judged the residual side channel a "small nuisance" by comparison, and pointed out that establishing the roughly 500 connections the refined attack needs is itself hard to do quietly against a real server — with session-hijacking risk better addressed by TLS than by closing every last bit of the timing channel.
+Caoはさらに、v2に対する攻撃の改良版（1,000をはるかに超えるプローブを送り、返ってきたchallenge ACKの数を使って正しい推測を推定する）を説明し、FreeBSDもWindowsもグローバル制限を課していないことを指摘したうえで、グローバル制限を単純に取り除くべきではないかと尋ねた。Dumazetの返信は、それでもカーネルが制限を維持した理由を説明していた。この制限は、3.6でレート制限が追加される以前にサーバーを悩ませていた、"buggy firewalls and appliances"（バグのあるファイアウォールやアプライアンス）が引き起こす"ACK storms"を抑えるために存在するのである。彼は、それと比べれば残るサイドチャネルは"small nuisance"（小さな厄介事）だと判断し、改良版の攻撃が必要とするおよそ500本のコネクションを確立すること自体、実際のサーバーに対して目立たずに行うのは難しいと指摘した。セッションハイジャックのリスクは、タイミングチャネルの最後の1ビットまで塞ぐよりもTLSで対処するほうがよい、というわけである。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A rate limiter is also a covert channel.** Any shared counter that an attacker can both perturb and observe — even indirectly, even without reading any protected data — can leak information about state the attacker shouldn't be able to infer.
+**レートリミッタはコバートチャネルでもある。** 攻撃者が摂動を与えることも観測することもできる共有カウンタは、たとえ間接的であっても、また保護されたデータを一切読まなくても、攻撃者が推定できるべきでない状態についての情報を漏らしうる。
 
-**Predictable resets amplify side channels.** A fixed per-second reset boundary meant the attacker could synchronize probes to the counter's lifecycle, turning a noisy signal into a reliable one.
+**予測可能なリセットはサイドチャネルを増幅する。** 固定された1秒ごとのリセット境界により、攻撃者はプローブをカウンタのライフサイクルに同期させることができ、ノイズの多いシグナルを信頼できるシグナルに変えられた。
 
-**Being the only compliant implementation can mean being the only exposed one.** Linux's correctness in implementing RFC 5961 faithfully is what created the side channel — other stacks that hadn't implemented the RFC's rate limiting simply didn't have this particular counter to attack.
+**唯一の準拠実装であることは、唯一の露出した実装であることを意味しうる。** RFC 5961を忠実に実装したというLinuxの正しさこそが、このサイドチャネルを生み出した。RFCのレート制限を実装していなかった他のスタックには、攻撃対象となるこの特定のカウンタがそもそも存在しなかった。
 
-!!! warning "Pattern to watch for"
-    Any globally-shared, attacker-perturbable counter gating a security-relevant response (challenge ACKs, error responses, retry limits) is a potential side channel if its state can be inferred by a party who didn't directly cause the perturbation. Check `sysctl net.ipv4.tcp_challenge_ack_limit` — it should be at least the post-fix default of 1000, and kernels older than 4.7 should be treated as exposed.
+!!! warning "注意すべきパターン"
+    セキュリティに関わる応答（challenge ACK、エラー応答、リトライ制限）を制御する、グローバルに共有され攻撃者が摂動を与えられるカウンタは、摂動を直接引き起こしていない者がその状態を推定できるなら、潜在的なサイドチャネルである。`sysctl net.ipv4.tcp_challenge_ack_limit`を確認すること。少なくとも修正後のデフォルトである1000であるべきで、4.7より古いカーネルは露出しているものとして扱うべきである。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [TCP Implementation](../tcp.md) — sequence number tracking and the challenge-ACK path
-- [The TCP SACK Panic](sack-panic.md) and [SegmentSmack](segmentsmack.md) — two other TCP-layer war stories from the same era
+- [TCPの実装](../tcp.md) — シーケンス番号の追跡とchallenge-ACKのパス
+- [The TCP SACK Panic](sack-panic.md)と[SegmentSmack](segmentsmack.md) — 同時期の他の2つのTCP層の事件簿
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [NVD: CVE-2016-5696](https://nvd.nist.gov/vuln/detail/CVE-2016-5696) — TCP challenge-ACK side channel CVE record
+- [NVD: CVE-2016-5696](https://nvd.nist.gov/vuln/detail/CVE-2016-5696) — TCP challenge-ACKサイドチャネルのCVEレコード
 - [git.kernel.org: 75ff39ccc1bd](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=75ff39ccc1bd5d3c455b6822ab09e533c551f758) — "tcp: make challenge acks less predictable"
-- [lore.kernel.org: tcp: make challenge acks less predictable (v1)](https://lore.kernel.org/netdev/1467995586.30694.34.camel@edumazet-glaptop3.roam.corp.google.com/) and [(v2)](https://lore.kernel.org/netdev/1468137842.30694.58.camel@edumazet-glaptop3.roam.corp.google.com/) — the netdev thread with reporter Yue Cao, showing the v1-to-v2 iteration and Dumazet's rationale for accepting a residual side channel
-- [lore.kernel.org: tcp: enable per-socket rate limiting of all "challenge acks"](https://lore.kernel.org/netdev/1468510720-322-1-git-send-email-jbaron@akamai.com/) — Jason Baron's explicit follow-up toward removing the global limit
-- [LWN: The TCP "challenge ACK" side channel](https://lwn.net/Articles/696868/) — Jake Edge's coverage, including the USENIX Security 2016 paper details
-- [Gnoxter/mountain_goat](https://github.com/Gnoxter/mountain_goat) — a published proof-of-concept exploit implementing the off-path inference attack
+- [lore.kernel.org: tcp: make challenge acks less predictable (v1)](https://lore.kernel.org/netdev/1467995586.30694.34.camel@edumazet-glaptop3.roam.corp.google.com/)と[(v2)](https://lore.kernel.org/netdev/1468137842.30694.58.camel@edumazet-glaptop3.roam.corp.google.com/) — 報告者Yue Caoとのnetdevスレッド。v1からv2への反復と、残るサイドチャネルを受け入れたDumazetの論拠を示している
+- [lore.kernel.org: tcp: enable per-socket rate limiting of all "challenge acks"](https://lore.kernel.org/netdev/1468510720-322-1-git-send-email-jbaron@akamai.com/) — グローバル制限の除去に向けたJason Baronの明示的な追従パッチ
+- [LWN: The TCP "challenge ACK" side channel](https://lwn.net/Articles/696868/) — Jake Edgeによる記事。USENIX Security 2016論文の詳細を含む
+- [Gnoxter/mountain_goat](https://github.com/Gnoxter/mountain_goat) — オフパス推定攻撃を実装した、公開済みの概念実証エクスプロイト

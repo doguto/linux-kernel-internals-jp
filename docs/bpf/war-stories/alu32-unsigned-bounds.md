@@ -1,78 +1,84 @@
-# The 32-Bit Unsigned Bounds Propagation Bug {#the-32-bit-unsigned-bounds-propagation-bug}
+# 32ビット符号なし境界の伝播バグ {#the-32-bit-unsigned-bounds-propagation-bug}
 
-> CVE-2021-31440 — a fix landed four and a half months earlier had corrected the signed half of a two-line pattern and left the unsigned half standing
+> CVE-2021-31440 — 4か月半前にマージされた修正は、2行からなるパターンの符号付きの側を直したが、符号なしの側は残したままだった
 
-Disclosed
-:   May 3, 2021 ([ZDI-21-503](https://www.zerodayinitiative.com/advisories/ZDI-21-503/), ZDI-CAN-13661; NVD record published May 21, 2021)
+公開
+:   2021年5月3日（[ZDI-21-503](https://www.zerodayinitiative.com/advisories/ZDI-21-503/)、ZDI-CAN-13661。NVDレコードの公開は2021年5月21日）
 
-Reported by
-:   Manfred Paul (per the fix commit's `Reported-by:` tag), via Trend Micro's Zero Day Initiative
+報告者
+:   Manfred Paul（修正コミットの`Reported-by:`タグによる）、Trend MicroのZero Day Initiative経由
 
 CVSS
-:   7.0 HIGH (`CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H`, NVD primary); 8.8 HIGH (`CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H`) from ZDI as secondary scorer
+:   7.0 HIGH（`CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H`、NVDの一次評価）。セカンダリ評価者としてのZDIによる評価は8.8 HIGH（`CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H`）
 
-Fixed in
-:   [`10bf4e83167c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=10bf4e83167cc68595b85fd73bb91e8f2c086e36), mainline v5.13-rc1
+修正バージョン
+:   [`10bf4e83167c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=10bf4e83167cc68595b85fd73bb91e8f2c086e36)、メインライン v5.13-rc1
 
-Exploit tool
-:   none catalogued on Exploit-DB; NVD lists no reference tagged `Exploit`
+エクスプロイトツール
+:   Exploit-DBには登録なし。NVDには`Exploit`タグの付いた参照はない
 
-Actively exploited
-:   no confirmed cases ([not on CISA KEV](https://nvd.nist.gov/vuln/detail/CVE-2021-31440))
+実際の悪用
+:   確認された事例なし（[CISA KEVに未掲載](https://nvd.nist.gov/vuln/detail/CVE-2021-31440)）
 
-*Part of [War Stories: BPF Verifier Bugs and CVEs](../war-stories.md).*
+*[事件簿: BPF verifierのバグとCVE](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 発生前の状態 {#before-state}
 
-Since [`3f50f132d840`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3f50f132d8400e129fc9eb68b5020167ef80a244) ("bpf: Verifier, do explicit ALU32 bounds tracking", v5.7-rc1), every scalar register in the verifier carries *two* sets of numeric bounds: the 64-bit `{s,u}{min,max}_value` and a separate 32-bit `{s,u}32_{min,max}_value` describing the low half.
+[`3f50f132d840`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3f50f132d8400e129fc9eb68b5020167ef80a244)（"bpf: Verifier, do explicit ALU32 bounds tracking"、v5.7-rc1）以降、verifier内のすべてのスカラーレジスタは*2組*の数値境界を持つ。64ビットの`{s,u}{min,max}_value`と、下位半分を表す別個の32ビットの`{s,u}32_{min,max}_value`である。
 
-Two sets of bounds means they have to be kept consistent. `__reg_combine_64_into_32()` is the direction that derives 32-bit bounds from 64-bit ones, and it did so one endpoint at a time:
+境界が2組あるということは、それらを一貫した状態に保たなければならないということである。`__reg_combine_64_into_32()`は64ビットの境界から32ビットの境界を導出する方向の処理で、それを端点ごとに1つずつ行っていた。
 
 ```c
-/* kernel/bpf/verifier.c, before the fix */
+/* kernel/bpf/verifier.c、修正前 */
 if (__reg64_bound_u32(reg->umin_value))
 	reg->u32_min_value = (u32)reg->umin_value;
 if (__reg64_bound_u32(reg->umax_value))
 	reg->u32_max_value = (u32)reg->umax_value;
 ```
 
-`__reg64_bound_u32(a)` is just `a > U32_MIN && a < U32_MAX` — "this value sits strictly inside the 32-bit range" (the strict comparisons exclude 0 and `U32_MAX` themselves).
+`__reg64_bound_u32(a)`は単に`a > U32_MIN && a < U32_MAX`、つまり「この値は32ビットの範囲の厳密に内側にある」というものである（厳密な比較により0と`U32_MAX`自体は除外される）。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Testing each endpoint independently is the bug. The fix commit states the rule that was violated:
+各端点を独立にテストすることこそがバグである。修正コミットは、破られていたルールを次のように述べている。
 
 > That is, really only set the `u32_{min,max}_value` when /both/ `{umin,umax}_value` safely fit in 32 bit space. For example, the register with a `umin_value == 1` does /not/ imply that `u32_min_value` is also equal to 1, since `umax_value` could be much larger than 32 bit subregister can hold, and thus `u32_min_value` is in the interval `[0,1]` instead.
 
-A register whose 64-bit range is `[1, 0xffffffff00000001]` can hold `0x100000000` — whose low 32 bits are zero. So `u32_min_value = 1` is a false statement about the register, derived from a true one.
+（訳: つまり、`u32_{min,max}_value`を設定するのは、`{umin,umax}_value`の/両方/が32ビット空間に安全に収まる場合に限るべきである。例えば、`umin_value == 1`であるレジスタは、`u32_min_value`も1に等しいことを/意味しない/。`umax_value`は32ビットのサブレジスタが保持できるよりもずっと大きいかもしれず、その場合`u32_min_value`は代わりに区間`[0,1]`に入る。）
 
-The commit shows the resulting verifier trace. After `if r2 >= 0x1` and `if w2 <= 0x1` on the goto paths, and then a `w2 = w2` (a 32-bit move that discards the high half):
+64ビットの範囲が`[1, 0xffffffff00000001]`であるレジスタは`0x100000000`を保持でき、その下位32ビットは0である。したがって`u32_min_value = 1`は、正しい事実から導出された、レジスタについての誤った記述である。
+
+コミットは、その結果として生じるverifierのトレースを示している。goto側のパスで`if r2 >= 0x1`と`if w2 <= 0x1`を経て、その後`w2 = w2`（上位半分を捨てる32ビットのmove）を行うと次のようになる。
 
 ```
 10: R0=inv1337 R1=ctx(id=0,off=0,imm=0) R2_w=inv1 R10=fp0
 ```
 
-`R2_w=inv1` means the verifier is now certain the register is exactly the constant 1. It is not. The bad `u32_min_value = 1` got promoted into a bad known-constant.
+`R2_w=inv1`は、verifierがこのレジスタはちょうど定数1であると確信していることを意味する。実際にはそうではない。誤った`u32_min_value = 1`が、誤った既知定数へと昇格してしまったのである。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-From that point the verifier is reasoning about a register whose real run-time value it no longer knows. NVD's description of the CVE puts the impact plainly:
+その時点から、verifierは実行時の実際の値をもはや知らないレジスタについて推論していることになる。NVDのCVEの説明は、影響を率直に述べている。
 
 > The specific flaw exists within the handling of eBPF programs. The issue results from the lack of proper validation of user-supplied eBPF programs prior to executing them. An attacker can leverage this vulnerability to escalate privileges and execute arbitrary code in the context of the kernel.
 
-The two scorers disagree meaningfully on how hard that is. NVD's primary score puts it at 7.0 with `AC:H` and unchanged scope; ZDI scored it 8.8 with `AC:L` and `S:C`. The disagreement is about attack complexity and blast radius, not about what the bug does.
+（訳: この欠陥はeBPFプログラムの処理に存在する。この問題は、ユーザーが提供したeBPFプログラムを実行する前に適切な検証が欠けていることに起因する。攻撃者はこの脆弱性を利用して権限を昇格し、カーネルのコンテキストで任意のコードを実行できる。）
 
-Unlike its sibling [CVE-2021-3490](alu32-bitwise-bounds.md), whose public exploit is catalogued on Packet Storm, no packaged public exploit for this one exists: NVD's reference list carries no `Exploit`-tagged entry, and there is no Exploit-DB entry.
+2つの評価者は、それがどれほど難しいかについて意味のある形で意見が分かれている。NVDの一次評価は`AC:H`かつスコープ不変で7.0とし、ZDIは`AC:L`かつ`S:C`で8.8と評価した。意見の相違は攻撃の複雑さと影響範囲についてであって、バグが何をするかについてではない。
 
-## Why it happened {#why-it-happened}
+公開エクスプロイトがPacket Stormに登録されている兄弟バグ[CVE-2021-3490](alu32-bitwise-bounds.md)とは異なり、こちらについてはパッケージ化された公開エクスプロイトは存在しない。NVDの参照リストには`Exploit`タグの付いたエントリはなく、Exploit-DBのエントリもない。
 
-This is not the first time this exact code shape was fixed.
+## なぜ起きたか {#why-it-happened}
 
-On December 8, 2020 — four and a half months before this fix — Alexei Starovoitov committed [`b02709587ea3`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b02709587ea3d699a608568ee8157d8db4fd8cae) ("bpf: Fix propagation of 32-bit signed bounds from 64-bit bounds."), reported by Jean-Philippe Brucker. Its reasoning is word-for-word the same argument, one signedness over:
+このまったく同じ形のコードが修正されたのは、これが初めてではない。
+
+2020年12月8日（この修正の4か月半前）、Alexei Starovoitovは、Jean-Philippe Bruckerの報告による[`b02709587ea3`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b02709587ea3d699a608568ee8157d8db4fd8cae)（"bpf: Fix propagation of 32-bit signed bounds from 64-bit bounds."）をコミットした。その論拠は、符号の有無が違うだけで一言一句同じ議論である。
 
 > The 64-bit signed bounds should not affect 32-bit signed bounds unless the verifier knows that upper 32-bits are either all 1s or all 0s. For example the register with `smin_value==1` doesn't mean that `s32_min_value` is also equal to 1, since `smax_value` could be larger than 32-bit subregister can hold.
 
-And its diff fixes exactly one of the two adjacent blocks:
+（訳: verifierが上位32ビットがすべて1かすべて0であることを知っている場合を除き、64ビットの符号付き境界は32ビットの符号付き境界に影響すべきではない。例えば、`smin_value==1`であるレジスタは、`s32_min_value`も1に等しいことを意味しない。`smax_value`は32ビットのサブレジスタが保持できるよりも大きいかもしれないからである。）
+
+そしてその差分は、隣接する2つのブロックのうちちょうど1つだけを修正している。
 
 ```diff
 -	if (__reg64_bound_s32(reg->smin_value))
@@ -87,13 +93,13 @@ And its diff fixes exactly one of the two adjacent blocks:
  		reg->u32_max_value = (u32)reg->umax_value;
 ```
 
-The unsigned block is right there in the diff context, immediately below the change, with identical structure — and it was left alone. The signed variant was the one that had been reported, so the signed variant was the one that got fixed.
+符号なしのブロックは差分のコンテキストのまさにそこ、変更箇所のすぐ下に同一の構造で存在している。そしてそれは手つかずのまま残された。報告されたのが符号付きの変種だったので、修正されたのも符号付きの変種だったのである。
 
-Both blocks trace back to the same parent commit, `3f50f132d840`, which introduced explicit ALU32 tracking in v5.7-rc1. That commit is also the `Fixes:` target of [CVE-2021-3490](alu32-bitwise-bounds.md), disclosed eighteen days after this one's fix was written. Adding a second, parallel representation of a register's value created a whole family of "keep the two in sync" obligations, and the bugs came in one at a time.
+両方のブロックは同じ親コミット`3f50f132d840`にさかのぼる。これはv5.7-rc1で明示的なALU32トラッキングを導入したコミットである。このコミットは、この修正が書かれた18日後に公開された[CVE-2021-3490](alu32-bitwise-bounds.md)の`Fixes:`の対象でもある。レジスタの値について2つ目の並行した表現を追加したことで、「2つを同期させておく」という義務の一群がまるごと生まれ、バグは一つずつやって来た。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-[`10bf4e83167c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=10bf4e83167cc68595b85fd73bb91e8f2c086e36) ("bpf: Fix propagation of 32 bit unsigned bounds from 64 bit bounds", Daniel Borkmann) applies the same shape of fix to the unsigned block:
+[`10bf4e83167c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=10bf4e83167cc68595b85fd73bb91e8f2c086e36)（"bpf: Fix propagation of 32 bit unsigned bounds from 64 bit bounds"、Daniel Borkmann）は、符号なしのブロックに同じ形の修正を適用する。
 
 ```diff
 -	if (__reg64_bound_u32(reg->umin_value))
@@ -104,43 +110,43 @@ Both blocks trace back to the same parent commit, `3f50f132d840`, which introduc
 +	}
 ```
 
-It also does one more thing worth noting: it rewrites `__reg64_bound_u32()` from an `if/return true/return false` into a plain `return a > U32_MIN && a < U32_MAX;`, matching how `b02709587ea3` had already restyled `__reg64_bound_s32()`. The commit's own words: "Also, align `__reg64_bound_u32()` similarly to `__reg64_bound_s32()` as done in `b02709587ea3` to make them uniform again." That is the fix explicitly finishing the job of the earlier one, cosmetics included.
+このコミットは注目に値することをもう一つ行っている。`__reg64_bound_u32()`を`if/return true/return false`の形から単純な`return a > U32_MIN && a < U32_MAX;`に書き換え、`b02709587ea3`がすでに`__reg64_bound_s32()`のスタイルを変更していたのに合わせたのである。コミット自身の言葉では: "Also, align `__reg64_bound_u32()` similarly to `__reg64_bound_s32()` as done in `b02709587ea3` to make them uniform again."（訳: また、`b02709587ea3`で行われたのと同様に`__reg64_bound_u32()`を`__reg64_bound_s32()`に揃え、再び統一する。）これは、見た目の修正も含めて、以前の修正がやり残した仕事を明示的に完了させる修正である。
 
-The patch carries `Reviewed-by: John Fastabend` and `Acked-by: Alexei Starovoitov`, but no `Link:` trailer to a public posting — consistent with a report handled privately before disclosure. Neither the commit nor NVD's reference list points to a mailing-list posting, so the public record is the CVE and the fix itself.
+このパッチには`Reviewed-by: John Fastabend`と`Acked-by: Alexei Starovoitov`が付いているが、公開投稿への`Link:`トレーラーはない。これは公開前に非公開で処理された報告であることと整合する。コミットもNVDの参照リストもメーリングリストへの投稿を指していないため、公開記録はCVEと修正自体である。
 
-One line of the diff records the behavioral change better than any of the prose. A BPF selftest that had been asserting the verifier rejected a program with a specific message was updated:
+差分の1行が、どの文章よりも挙動の変化をよく記録している。verifierが特定のメッセージでプログラムを拒否することをアサートしていたBPFセルフテストが更新された。
 
 ```diff
 -	.errstr = "invalid access to map value, value_size=48 off=44 size=8",
 +	.errstr = "R0 unbounded memory access",
 ```
 
-Before the fix the verifier believed it knew the offset precisely enough to complain about that specific offset. After it, the verifier correctly admits it does not know the value at all.
+修正前、verifierはその特定のオフセットについて文句を言えるほど正確にオフセットを知っていると信じていた。修正後、verifierはその値をまったく知らないことを正しく認める。
 
-The same bounds-propagation logic came back once more, publicly, six months later. In November 2021, [Starovoitov posted](https://lore.kernel.org/all/20211101222153.78759-1-alexei.starovoitov@gmail.com/) a further fix carrying `Fixes: 10bf4e83167c` — this page's fix, by name. It wasn't a security bug: "Before commit `10bf4e83167c` the umin was incorrectly ignored. The commit `10bf4e83167c` fixed the correctness issue, but pessimized propagation of 64-bit min max into 32-bit min max and corresponding var_off." A companion patch made the equivalent change on the *signed* side — that half's imprecision dated back not to this fix but a year earlier, to `3f50f132d840` itself — with a commit message explicit that its own `Fixes:` tag was only a hint: "The Fixes tag is a hint. There is no security bug here. The verifier was too conservative." The same series repaired both halves at once, once the security fix had shipped and there was time to revisit the precision it had cost.
+同じ境界伝播のロジックは、6か月後にもう一度、公の場に戻ってきた。2021年11月、Starovoitovは`Fixes: 10bf4e83167c`、つまりこのページの修正を名指しするさらなる修正を[投稿した](https://lore.kernel.org/all/20211101222153.78759-1-alexei.starovoitov@gmail.com/)。これはセキュリティバグではなかった: "Before commit `10bf4e83167c` the umin was incorrectly ignored. The commit `10bf4e83167c` fixed the correctness issue, but pessimized propagation of 64-bit min max into 32-bit min max and corresponding var_off."（訳: コミット`10bf4e83167c`以前は、uminが誤って無視されていた。コミット`10bf4e83167c`は正しさの問題を修正したが、64ビットのmin/maxから32ビットのmin/maxおよび対応するvar_offへの伝播を悲観的にしてしまった。）付随するパッチが*符号付き*の側で同等の変更を行った。そちら側の不正確さはこの修正ではなく、その1年前の`3f50f132d840`自体にまでさかのぼるものだった。そのコミットメッセージは、自身の`Fixes:`タグが単なるヒントに過ぎないことを明言していた: "The Fixes tag is a hint. There is no security bug here. The verifier was too conservative."（訳: Fixesタグはヒントである。ここにセキュリティバグはない。verifierが保守的すぎたのである。）セキュリティ修正が出荷され、それが犠牲にした精度を見直す時間ができてから、同じシリーズが両方の側を一度に修復した。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**When a bug report names one variant, the fix's scope is every sibling in the same block.** The signed and unsigned propagation paths were adjacent, identically structured, and derived from the same commit. Fixing one and shipping is a defensible response to a bug report and an indefensible response to a bug *class*. Four and a half months and one CVE separated the two halves.
+**バグ報告が1つの変種を名指ししているとき、修正の範囲は同じブロック内のすべての兄弟である。** 符号付きと符号なしの伝播パスは隣接し、同一の構造を持ち、同じコミットから派生していた。一方を修正して出荷するのは、バグ報告に対する応答としては擁護できるが、バグの*クラス*に対する応答としては擁護できない。2つの側の間には、4か月半と1つのCVEが横たわっていた。
 
-**Redundant representations of the same fact create synchronization obligations that no compiler checks.** `3f50f132d840` gave every register a second set of bounds for good reasons — real BPF programs written in C do 32-bit arithmetic, and forcing everything into 64-bit bounds made the verifier reject correct programs. The cost was a set of invariants ("the 32-bit bounds must be implied by the 64-bit bounds and vice versa") that live only in reviewers' heads.
+**同じ事実の冗長な表現は、どのコンパイラもチェックしない同期の義務を生み出す。** `3f50f132d840`がすべてのレジスタに2組目の境界を与えたのには正当な理由があった。Cで書かれた実際のBPFプログラムは32ビット演算を行い、すべてを64ビットの境界に押し込めるとverifierが正しいプログラムを拒否してしまったのである。その代償は、レビュアーの頭の中にしか存在しない一連の不変条件（「32ビットの境界は64ビットの境界から導かれなければならず、その逆も同様」）だった。
 
-**A one-sided range test is not a range test.** `if (endpoint_fits) narrow(endpoint)` is wrong whenever narrowing one endpoint asserts something about the interval as a whole. The correct predicate is about the interval, not the endpoint — which is exactly what the fix's `&&` encodes.
+**片側だけの範囲テストは範囲テストではない。** `if (endpoint_fits) narrow(endpoint)`は、一方の端点を狭めることが区間全体について何かを主張することになる場合には常に誤りである。正しい述語は端点についてではなく区間についてのものであり、それこそが修正の`&&`が表現しているものである。
 
-!!! warning "Pattern to watch for"
-    Grep for paired `if (cond_a) x = ...;` / `if (cond_b) y = ...;` blocks that jointly define a range, an extent, or a start/end pair. If narrowing one end without the other can produce a range that excludes real values, the two tests belong in one condition. And when reviewing any `Fixes:`-tagged patch, read the surrounding hunk context for a structurally identical block the patch did not touch — in this case the vulnerable code was visible, unchanged, in the trailing context immediately below the fix, in the fix's own diff.
+!!! warning "注意すべきパターン"
+    範囲、エクステント、あるいは開始/終了のペアを共同で定義する、対になった`if (cond_a) x = ...;` / `if (cond_b) y = ...;`ブロックをgrepすること。一方の端だけを狭めることで実際の値を除外する範囲が生じうるなら、2つのテストは1つの条件にまとめるべきである。そして`Fixes:`タグ付きのパッチをレビューするときは、パッチが触れていない構造的に同一のブロックがないか、周囲のハンクのコンテキストを読むこと。このケースでは、脆弱なコードは修正自身の差分の中で、修正箇所のすぐ下の後続コンテキストに変更されないまま見えていた。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [BPF Verifier](../bpf-verifier.md) — register bounds tracking and how the verifier reasons about scalar values
-- [ALU32 Bitwise Bounds Tracking](alu32-bitwise-bounds.md) — the other 2021 CVE against the same introducing commit, reported by the same researcher
-- [The jmp32 Bounds Regression](jmp32-bounds.md) — the 2020 CVE whose fallout produced `3f50f132d840` in the first place
-- [Unprivileged BPF Off by Default](unprivileged-bpf-off.md) — the hardening response to this run of verifier CVEs
+- [BPF Verifier](../bpf-verifier.md) — レジスタ境界の追跡と、verifierがスカラー値についてどう推論するか
+- [ALU32 Bitwise Bounds Tracking](alu32-bitwise-bounds.md) — 同じ導入コミットに対する2021年のもう一つのCVEで、同じ研究者が報告したもの
+- [The jmp32 Bounds Regression](jmp32-bounds.md) — その余波がそもそも`3f50f132d840`を生み出すことになった2020年のCVE
+- [Unprivileged BPF Off by Default](unprivileged-bpf-off.md) — 一連のverifier CVEに対するハードニングの対応
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [NVD: CVE-2021-31440](https://nvd.nist.gov/vuln/detail/CVE-2021-31440) — CVSS 7.0 HIGH (NVD) / 8.8 HIGH (ZDI), published May 21, 2021
-- [git.kernel.org: 10bf4e83167c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=10bf4e83167cc68595b85fd73bb91e8f2c086e36) — "bpf: Fix propagation of 32 bit unsigned bounds from 64 bit bounds", the fix
-- [git.kernel.org: b02709587ea3](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b02709587ea3d699a608568ee8157d8db4fd8cae) — "bpf: Fix propagation of 32-bit signed bounds from 64-bit bounds." (December 2020), the signed half of the same bug, fixed first
-- [git.kernel.org: 3f50f132d840](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3f50f132d8400e129fc9eb68b5020167ef80a244) — "bpf: Verifier, do explicit ALU32 bounds tracking" (v5.7-rc1), the introducing commit named by both 2021 CVEs
-- [lore.kernel.org: bpf: Fix propagation of bounds from 64-bit min/max into 32-bit and var_off](https://lore.kernel.org/all/20211101222153.78759-1-alexei.starovoitov@gmail.com/) — the November 2021 follow-up carrying `Fixes: 10bf4e83167c`, restoring precision this page's fix had cost; its signed-side companion patch is explicit that it fixed no security bug
+- [NVD: CVE-2021-31440](https://nvd.nist.gov/vuln/detail/CVE-2021-31440) — CVSS 7.0 HIGH（NVD）/ 8.8 HIGH（ZDI）、2021年5月21日公開
+- [git.kernel.org: 10bf4e83167c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=10bf4e83167cc68595b85fd73bb91e8f2c086e36) — "bpf: Fix propagation of 32 bit unsigned bounds from 64 bit bounds"、修正コミット
+- [git.kernel.org: b02709587ea3](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b02709587ea3d699a608568ee8157d8db4fd8cae) — "bpf: Fix propagation of 32-bit signed bounds from 64-bit bounds."（2020年12月）、同じバグの符号付きの側で、先に修正されたもの
+- [git.kernel.org: 3f50f132d840](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3f50f132d8400e129fc9eb68b5020167ef80a244) — "bpf: Verifier, do explicit ALU32 bounds tracking"（v5.7-rc1）、2021年の両CVEが名指しする導入コミット
+- [lore.kernel.org: bpf: Fix propagation of bounds from 64-bit min/max into 32-bit and var_off](https://lore.kernel.org/all/20211101222153.78759-1-alexei.starovoitov@gmail.com/) — `Fixes: 10bf4e83167c`を持つ2021年11月の後続パッチで、このページの修正が犠牲にした精度を回復した。その符号付き側の付随パッチは、セキュリティバグを修正したものではないことを明言している

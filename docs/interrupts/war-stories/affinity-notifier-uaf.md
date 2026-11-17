@@ -1,65 +1,65 @@
-# The Affinity Notifier That Outlived Its Own Reference Count {#the-affinity-notifier-that-outlived-its-own-reference-count}
+# 自身の参照カウントより長生きしたアフィニティ通知 {#the-affinity-notifier-that-outlived-its-own-reference-count}
 
-> Replacing a callback and freeing the old one looked complete once the reference count hit zero — except the old callback could still be sitting in a workqueue, about to run on memory that had just been freed
+> コールバックを差し替えて古いものを解放する処理は、参照カウントがゼロになった時点で完結しているように見えた。ところが古いコールバックはまだworkqueueに入っていて、解放されたばかりのメモリ上で実行されようとしていることがあった
 
-Landed
-:   Linux 5.2 (July 2019) · fix authored March 24, 2019
+収録
+:   Linux 5.2（2019年7月）· 修正の作成は2019年3月24日
 
-Authors
-:   Prasad Sodagudi (author); Thomas Gleixner (applied the fix)
+作者
+:   Prasad Sodagudi（作者）、Thomas Gleixner（修正を適用）
 
-Heuristic/API introduced by
-:   Ben Hutchings, `irq_set_affinity_notifier()`, January 2011 (Linux 2.6.39) — about eight years before this fix
+ヒューリスティック/APIの導入者
+:   Ben Hutchings、`irq_set_affinity_notifier()`、2011年1月（Linux 2.6.39）。この修正の約8年前
 
-Not a CVE
+CVEではない
 
-*Part of [War Stories: Interrupt and IRQ-Affinity Bugs](../war-stories.md).*
+*[事件簿: 割り込みとIRQアフィニティのバグ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-`irq_set_affinity_notifier()` lets a driver register a callback that fires whenever an interrupt's CPU affinity changes. Because the notification itself has to happen outside the context where the affinity actually changed, the notifier's callback doesn't run inline — the kernel queues a `struct work_struct` to invoke it later, in ordinary process context. The notifier object is reference-counted with a `kref`, since both the interrupt subsystem and the still-pending work item can hold a reference to it at the same time.
+`irq_set_affinity_notifier()` を使うと、ドライバは割り込みのCPUアフィニティが変わるたびに発火するコールバックを登録できる。通知自体はアフィニティが実際に変更されたコンテキストの外で行う必要があるため、通知のコールバックはインラインでは実行されない。カーネルは `struct work_struct` をキューに入れ、後で通常のプロセスコンテキストでそれを呼び出す。割り込みサブシステムと、まだ保留中のワークアイテムの両方が同時に参照を保持しうるため、notifierオブジェクトは `kref` で参照カウントされている。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-When a driver calls `irq_set_affinity_notifier()` again to install a *new* notifier — replacing whatever was registered before — the function correctly drops the *old* notifier's reference count. If that drop takes the count to zero, `kref_put()` invokes the notifier's own `release` callback, freeing the memory the old notifier occupied. Nothing about that sequence checked whether the old notifier's work item was still sitting in a workqueue waiting to run.
+ドライバが `irq_set_affinity_notifier()` を再び呼んで*新しい*notifierをインストールし、以前に登録されていたものを置き換えると、関数は*古い*notifierの参照カウントを正しく減らす。その減算でカウントがゼロになると、`kref_put()` はnotifier自身の `release` コールバックを呼び出し、古いnotifierが占めていたメモリを解放する。この一連の処理のどこにも、古いnotifierのワークアイテムがまだworkqueueに入って実行を待っているかどうかを確認するものはなかった。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-If the old notifier's callback work was still queued at the moment its reference count hit zero, the memory it pointed to was freed while a workqueue thread still held a pending job to execute code inside it. When that job eventually ran, it operated on already-freed memory — a use-after-free that, depending on what had since reallocated that memory, could also corrupt whatever workqueue's own internal list-management state happened to overlap with the freed notifier's memory layout.
+参照カウントがゼロになった瞬間に古いnotifierのコールバックのワークがまだキューに入っていると、workqueueのスレッドがその中のコードを実行する保留中のジョブをまだ持っている間に、ワークが指すメモリが解放された。そのジョブが最終的に実行されると、すでに解放されたメモリ上で動作した。これはuse-after-freeであり、その後そのメモリが何に再割り当てされたかによっては、解放されたnotifierのメモリ配置とたまたま重なったworkqueue自身の内部リスト管理状態を破壊することもありえた。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The reference count itself wasn't the gap — the still-queued work item genuinely held one: `irq_set_affinity_locked()` calls `kref_get(&desc->affinity_notify->kref)` before it calls `schedule_work()`, and the callback, `irq_affinity_notify()`, ends with the matching `kref_put()` once it has run. What was missing was any synchronization between *that* lifecycle and the one `irq_set_affinity_notifier()` uses when a driver installs a replacement notifier. The replacement path dropped its own reference on the old notifier — potentially the reference that brought the count to zero and freed it — without first checking, or waiting for, whether the old notifier's work was still sitting in the workqueue. The fix's own commit message states the problem plainly: "nothing ensures that the old notifier is not longer queued in the work list. If it is queued this results in a use after free and possibly in work list corruption." (The commit's own wording, typo included.) A correctly-counted reference protects an object only for as long as something continues to hold it; it says nothing about *when* the last holder lets go relative to a still-outstanding use elsewhere, and closing that gap needed an explicit wait, not better counting.
+参照カウント自体が隙間だったわけではない。まだキューに入っているワークアイテムは本当に参照を1つ保持していた。`irq_set_affinity_locked()` は `schedule_work()` を呼ぶ前に `kref_get(&desc->affinity_notify->kref)` を呼び、コールバックである `irq_affinity_notify()` は実行を終えると対応する `kref_put()` で終わる。欠けていたのは、*その*ライフサイクルと、ドライバが置き換えのnotifierをインストールするときに `irq_set_affinity_notifier()` が使うライフサイクルとの間の同期だった。置き換えパスは、古いnotifierのワークがまだworkqueueに入っているかどうかを先に確認したり待ったりせずに、古いnotifierに対する自身の参照を手放していた。それはカウントをゼロにして解放する参照だったかもしれない。修正のコミットメッセージ自身が問題を率直に述べている。"nothing ensures that the old notifier is not longer queued in the work list. If it is queued this results in a use after free and possibly in work list corruption."（訳: 古いnotifierがもはやワークリストに入っていないことを保証するものが何もない。入っていればuse-after-freeとなり、ワークリストが破壊される可能性もある。）（タイプミスも含めてコミットの原文どおり。）正しくカウントされた参照がオブジェクトを守るのは、何かがそれを保持し続けている間だけである。最後の保持者が、別の場所でまだ未完了の使用に対して*いつ*手放すかについては何も語らない。その隙間を塞ぐには、より良いカウントではなく明示的な待機が必要だった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-The fix adds two lines: before calling `kref_put()` on the old notifier, `irq_set_affinity_notifier()` now calls `cancel_work_sync(&old_notify->work)` first. `cancel_work_sync()` blocks until the work item is guaranteed to either have already run to completion or never run at all, which means by the time `kref_put()` executes, nothing can still be pending against the notifier being freed.
+修正は2行を追加する。古いnotifierに対して `kref_put()` を呼ぶ前に、`irq_set_affinity_notifier()` はまず `cancel_work_sync(&old_notify->work)` を呼ぶようになった。`cancel_work_sync()` は、ワークアイテムがすでに完了まで実行されたか、まったく実行されないかのどちらかが保証されるまでブロックする。つまり `kref_put()` が実行される時点では、解放されるnotifierに対して保留中のものは何も残っていない。
 
-This wasn't quite the end of the story. A year later, commit [`df81dfcfd699`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=df81dfcfd6991d547653d46c051bac195cd182c1) (Edward Cree, landed in Linux 5.7) found that this fix had traded the use-after-free for a reference leak: if `cancel_work_sync()` actually canceled outstanding work, that work's own `kref_get()` was never matched by a `kref_put()`, because the callback that would have released it never got to run. Current mainline handles this by checking `cancel_work_sync()`'s return value and putting the extra reference only when it reports having canceled real pending work:
+これで話が完全に終わったわけではなかった。1年後、コミット [`df81dfcfd699`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=df81dfcfd6991d547653d46c051bac195cd182c1)（Edward Cree、Linux 5.7でマージ）は、この修正がuse-after-freeを参照リークと引き換えにしていたことを発見した。`cancel_work_sync()` が未完了のワークを実際にキャンセルした場合、そのワーク自身の `kref_get()` に対応する `kref_put()` は呼ばれない。それを解放するはずだったコールバックが実行される機会を得なかったからである。現在のメインラインは、`cancel_work_sync()` の戻り値を確認し、実際の保留中ワークをキャンセルしたと報告された場合にのみ余分な参照を解放することでこれに対処している。
 ```c
 if (old_notify) {
         if (cancel_work_sync(&old_notify->work)) {
-                /* Pending work had a ref, put that one too */
+                /* 保留中のワークが参照を持っていたので、それも解放する */
                 kref_put(&old_notify->kref, old_notify->release);
         }
         kref_put(&old_notify->kref, old_notify->release);
 }
 ```
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**Cancelling deferred work and releasing a reference are two separate operations, and getting the interaction right took two attempts.** The first fix correctly closed the use-after-free by cancelling the work before dropping the reference, but didn't account for the reference *that cancelled work itself was holding* — trading a crash for a slow leak.
+**遅延実行されるワークのキャンセルと参照の解放は2つの別々の操作であり、その相互作用を正しくするのに2回の試みを要した。** 最初の修正は、参照を手放す前にワークをキャンセルすることでuse-after-freeを正しく塞いだが、*キャンセルされたワーク自身が保持していた*参照を考慮していなかった。クラッシュを緩やかなリークと引き換えにしたのである。
 
-**"Cancel the pending work before releasing what it touches" is the general shape of the fix, and it generalizes far beyond this one notifier — but only if the cancellation's own bookkeeping is accounted for too.** Any object that both participates in reference counting and can be the target of a still-queued deferred callback needs the cancel-then-release ordering, and needs to ask whether the callback itself held a reference that a successful cancellation now leaves stranded.
+**「保留中のワークを、それが触れるものを解放する前にキャンセルする」は修正の一般的な形であり、このnotifier以外にも広く一般化できる。ただし、キャンセル自体の管理情報も考慮に入れた場合に限る。** 参照カウントに参加し、かつまだキューに入っている遅延コールバックの対象になりうるオブジェクトは、すべて「キャンセルしてから解放する」順序を必要とする。さらに、コールバック自体が参照を保持していて、キャンセルに成功するとその参照が宙に浮いてしまわないかを問う必要がある。
 
-!!! warning "Pattern to watch for"
-    Before freeing (or letting a `kref` free) any object that a work item, timer, or tasklet might still reference, ask whether that deferred mechanism was ever cancelled — and cancel it *synchronously*, not just requested-to-cancel, before the free happens. Then check the other direction too: if the deferred mechanism itself held a counted reference, a successful cancellation means that reference now needs to be released explicitly, since the callback that would have released it will never run.
+!!! warning "注意すべきパターン"
+    ワークアイテム、タイマー、taskletがまだ参照している可能性のあるオブジェクトを解放する（あるいは `kref` に解放させる）前に、その遅延機構がキャンセルされたかどうかを問うこと。そして解放の前に、キャンセルを要求するだけでなく*同期的に*キャンセルすること。その上で逆方向も確認すること。遅延機構自体がカウントされた参照を保持していた場合、キャンセルに成功したということは、それを解放するはずだったコールバックが二度と実行されないため、その参照を明示的に解放する必要がある。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Workqueues](../workqueues.md) — the deferred-execution mechanism the notifier's callback runs through
+- [workqueue](../workqueues.md) — notifierのコールバックが実行される遅延実行の仕組み
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: 59c39840f5ab](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=59c39840f5ab) — "genirq: Prevent use-after-free and work list corruption," the fix commit
-- [git.kernel.org: df81dfcfd699](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=df81dfcfd6991d547653d46c051bac195cd182c1) — "genirq: fix reference leaks on irq affinity notifiers," Edward Cree's follow-up fix for the reference leak the first fix introduced
+- [git.kernel.org: 59c39840f5ab](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=59c39840f5ab) — "genirq: Prevent use-after-free and work list corruption"、修正コミット
+- [git.kernel.org: df81dfcfd699](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=df81dfcfd6991d547653d46c051bac195cd182c1) — "genirq: fix reference leaks on irq affinity notifiers"、最初の修正が持ち込んだ参照リークに対するEdward Creeの追加修正

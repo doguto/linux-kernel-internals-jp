@@ -1,57 +1,57 @@
-# The Vector Leak That Needed Two CPUs to Go Offline in the Wrong Order {#the-vector-leak-that-needed-two-cpus-to-go-offline-in-the-wrong-order}
+# 2つの CPU が間違った順序でオフラインになる必要があったベクタリーク {#the-vector-leak-that-needed-two-cpus-to-go-offline-in-the-wrong-order}
 
-> A deferred interrupt-affinity change, a CPU that goes offline before its cleanup work runs, and a fix that had shipped seven years of "modernized" vector management still didn't fully close
+> 遅延された割り込みアフィニティの変更、クリーンアップ処理が走る前にオフラインになる CPU、そして7年にわたって「近代化」されてきたベクタ管理がそれでも完全には塞いでいなかった穴を塞ぐ修正
 
-Landed
-:   Linux 6.10 (July 2024) · fix authored May 22, 2024
+マージ
+:   Linux 6.10（2024年7月）· 修正の作成は2024年5月22日
 
-Authors
-:   Dongli Zhang (report and fix)
+作者
+:   Dongli Zhang（報告と修正）
 
 CVE
 :   CVE-2024-31076
 
-*Part of [War Stories: Interrupt and IRQ-Affinity Bugs](../war-stories.md).*
+*[事件簿：割り込みと IRQ アフィニティのバグ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-On x86, moving an interrupt's affinity away from a CPU is not instantaneous. Changing affinity through procfs without the `IRQD_MOVE_PCNTXT` flag defers the actual move: the kernel waits until the interrupt next fires on its *current* CPU, and only then does `__irq_move_irq()` allocate a vector on the new CPU and mark the old one for cleanup via `apicd->move_in_progress`. The old vector isn't freed immediately, because doing so before the in-flight interrupt is guaranteed to be fully handled risks the same interrupt racing with itself across two CPUs. Freeing it is left for later, once the *new* CPU proves it received the interrupt.
+x86 では、割り込みのアフィニティをある CPU から移すことは即座には行われない。`IRQD_MOVE_PCNTXT` フラグなしで procfs を通じてアフィニティを変更すると、実際の移動は遅延される。カーネルはその割り込みが*現在の* CPU で次に発生するまで待ち、そのときになって初めて `__irq_move_irq()` が新しい CPU 上にベクタを割り当て、`apicd->move_in_progress` を通じて古いベクタをクリーンアップ対象としてマークする。古いベクタはすぐには解放されない。処理中の割り込みが完全に処理されたことが保証される前に解放すると、同じ割り込みが2つの CPU にまたがって自分自身と競合するおそれがあるからである。解放は後回しにされ、*新しい* CPU が割り込みを受け取ったことが確認された時点で行われる。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-That "later" is where the design has a gap. When the interrupt fires again — now on the new CPU — `irq_complete_move()` records the old CPU's stale vector on that old CPU's own `vector_cleanup` list, so a per-CPU timer running there can reclaim it in due course. That reclamation only happens if the old CPU is still online to run its own cleanup timer. If the old CPU is hot-unplugged before the interrupt ever fires again on the new CPU, nothing has queued the cleanup yet, and the CPU going away should have triggered `irq_force_complete_move()` as a fallback — except that function only fires for interrupts the offlining code still considers affine to the outgoing CPU. Because the affinity change had *already* been recorded as pointing at the new CPU, `irq_needs_fixup()` returns false, and the outgoing CPU's cleanup path skips this interrupt entirely, believing there's nothing left to do for it.
+その「後で」こそ、設計に穴がある場所である。割り込みが再び — 今度は新しい CPU で — 発生すると、`irq_complete_move()` は古い CPU の古いベクタを、その古い CPU 自身の `vector_cleanup` リストに記録し、そこで動く per-CPU タイマーがやがてそれを回収できるようにする。この回収は、古い CPU がまだオンラインで自分のクリーンアップタイマーを実行できる場合にしか起こらない。新しい CPU で割り込みが再び発生する前に古い CPU がホットアンプラグされた場合、まだ誰もクリーンアップをキューに入れておらず、CPU が消えることがフォールバックとして `irq_force_complete_move()` を起動するはずだった — ところがこの関数は、オフライン化処理のコードがまだ退出する CPU にアフィンだとみなしている割り込みに対してしか起動されない。アフィニティの変更は*すでに*新しい CPU を指すものとして記録されていたので、`irq_needs_fixup()` は false を返し、退出する CPU のクリーンアップパスは、もうやることは何もないと信じてこの割り込みを完全にスキップする。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The stale vector is now stranded. `__vector_schedule_cleanup()` does still run for it later, triggered from the new CPU's side of the machinery — but by that point the outgoing CPU is already gone, so the function has no vector to actually reclaim; it can only reset `apicd->move_in_progress` and `apicd->prev_vector` back to zero and move on. The bookkeeping is cleared, but the vector itself was never returned to `vector_matrix`, the allocator that tracks which of a CPU's limited interrupt vectors are in use. Each time this sequence repeats — an affinity change deferred, then the source CPU offlined before the interrupt fires again on the destination — one more vector is lost. On a system that offlines and re-onlines CPUs routinely (a common pattern for power management, live-migration prep, or NUMA rebalancing), the leak compounds until vector space on some CPU is exhausted and new interrupts can no longer be assigned there at all.
+古いベクタはこうして取り残される。`__vector_schedule_cleanup()` はその後も、機構の新しい CPU 側から起動されてこのベクタに対して実行される — しかしその時点では退出する CPU はすでに存在しないので、この関数には実際に回収できるベクタがない。できるのは `apicd->move_in_progress` と `apicd->prev_vector` をゼロに戻して先へ進むことだけである。帳簿はクリアされるが、ベクタ自体は `vector_matrix` — CPU ごとに限られた割り込みベクタのうちどれが使用中かを追跡するアロケータ — に一度も返却されない。このシーケンス — アフィニティ変更が遅延され、その後、移動先で割り込みが再び発生する前に移動元の CPU がオフラインになる — が繰り返されるたびに、ベクタが1つずつ失われる。CPU のオフライン化と再オンライン化を日常的に行うシステム（電力管理、ライブマイグレーションの準備、NUMA の再バランスでよく見られるパターン）では、リークが積み重なり、やがてある CPU のベクタ空間が枯渇して、新しい割り込みをそこに一切割り当てられなくなる。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-This is a race between two independent lifecycles that the code was tracking with local, per-path assumptions rather than a single source of truth: the "has this interrupt's move actually completed" state, and the "is this CPU about to disappear" state. Each individual check — `irq_needs_fixup()`'s affinity test, `irq_complete_move()`'s deferred-cleanup scheduling — is locally correct for the ordering it was written to expect. The bug only appears in the specific interleaving where a CPU offline event lands in the narrow window after an affinity change has been recorded but before the interrupt has fired even once on its new target.
+これは、コードが単一の信頼できる情報源ではなく、パスごとのローカルな仮定で追跡していた2つの独立したライフサイクルの間の競合である。「この割り込みの移動は実際に完了したか」という状態と、「この CPU はまもなく消えるか」という状態である。個々のチェック — `irq_needs_fixup()` のアフィニティ判定、`irq_complete_move()` の遅延クリーンアップのスケジューリング — は、それぞれが想定して書かれた順序に対してはローカルに正しい。バグは、アフィニティの変更が記録された後、かつ割り込みが新しいターゲットで一度も発生していない前という狭い窓に、CPU のオフラインイベントが入り込むという特定のインターリーブでのみ現れる。
 
-That window predates the `vector_matrix`/`apicd`-based design most of the rest of this page's incidents live in. The fix's own `Fixes:` tag points to [`f0383c24b485`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f0383c24b4855f6a4b5a358c7b2d2c16e0437e9b) (Thomas Gleixner, June 2017, "genirq/cpuhotplug: Add support for cleaning up move in progress"), which landed in Linux 4.13 — the generic `irq_needs_fixup()`/`irq_force_complete_move()` machinery this bug's race lives in didn't exist before that commit at all. The [2017 rework of x86 vector management](https://lwn.net/Articles/733618/) that introduced today's `vector_matrix`/`apicd`-based design came slightly later, in Linux 4.15, and inherited this specific race rather than introducing it. Both changes were motivated by the same underlying problem — CPU-offline and hibernation fragility in vector management — which shows how much of this problem space is inherently about ordering CPU-lifecycle events against in-flight interrupt state, not about any one implementation being sloppy.
+この窓は、このページの他の事件の大半が存在する `vector_matrix`/`apicd` ベースの設計よりも古い。修正自身の `Fixes:` タグは [`f0383c24b485`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f0383c24b4855f6a4b5a358c7b2d2c16e0437e9b)（Thomas Gleixner、2017年6月、"genirq/cpuhotplug: Add support for cleaning up move in progress"）を指しており、これは Linux 4.13 でマージされた — このバグの競合が存在する汎用の `irq_needs_fixup()`/`irq_force_complete_move()` 機構は、このコミット以前にはまったく存在しなかった。今日の `vector_matrix`/`apicd` ベースの設計を導入した [2017年の x86 ベクタ管理の作り直し](https://lwn.net/Articles/733618/) はそれより少し後の Linux 4.15 で入り、この特定の競合を持ち込んだのではなく受け継いだ。どちらの変更も同じ根本的な問題 — ベクタ管理における CPU オフラインとハイバネーションの脆さ — を動機としており、この問題領域の多くが、どれか1つの実装がずさんであることではなく、本質的に CPU のライフサイクルイベントと処理中の割り込み状態との順序づけに関わるものであることを示している。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-The fix reorders the outgoing-CPU cleanup path so `irq_force_complete_move()` runs *before* the `irq_needs_fixup()` affinity check, for any interrupt that is currently affine to the outgoing CPU *or* used to be — closing the exact gap the stale affinity record was hiding behind. As a second line of defense, `__vector_schedule_cleanup()` was also changed to reclaim the vector itself (with a warning) if it's ever invoked in the state this bug produced, even though the reordering should mean that path is never taken anymore in practice.
+修正は退出する CPU のクリーンアップパスの順序を入れ替え、現在退出する CPU にアフィンである割り込み、*または*かつてアフィンだった割り込みについて、`irq_needs_fixup()` のアフィニティチェックの*前に* `irq_force_complete_move()` が実行されるようにした — 古いアフィニティの記録が隠していた、まさにその穴を塞ぐものである。第二の防御線として、`__vector_schedule_cleanup()` も変更され、このバグが生み出した状態で呼び出された場合には、（警告付きで）ベクタ自体を回収するようになった。順序の入れ替えによって、実際にはもうそのパスを通ることはないはずだとしても、である。
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**Cleanup-on-teardown code paths need to check both possible orderings of the events they're racing against, not just the common one.** The common case — an interrupt fires again before its old CPU goes offline — was handled correctly from the start. The bug lived entirely in the far less common, harder-to-hit ordering, which is exactly the kind of path that survives code review and normal testing for years.
+**後始末時のクリーンアップのコードパスは、競合しているイベントについて、よくある順序だけでなく、起こりうる両方の順序をチェックする必要がある。** よくあるケース — 古い CPU がオフラインになる前に割り込みが再び発生する — は最初から正しく処理されていた。バグは完全に、はるかにまれで発生させにくい順序の中にあった。それはまさに、コードレビューや通常のテストを何年もくぐり抜けるたぐいのパスである。
 
-**A major rewrite of a subsystem doesn't retire the class of bug the rewrite was meant to fix — it just changes which specific race is still open.** Both the generic cpuhotplug fixup machinery this bug lives in and the x86-specific vector-management rework that came a couple of months later were responses to the same underlying CPU-offline-related fragility. Seven years after the first of those fixes, a CPU-offline-related bug was still there, just in a narrower, harder-to-trigger form.
+**サブシステムの大規模な書き直しは、その書き直しが直そうとしたバグのクラスを引退させるわけではない — まだ開いている具体的な競合がどれかを変えるだけである。** このバグが存在する汎用の cpuhotplug の後始末機構も、その数か月後に来た x86 固有のベクタ管理の作り直しも、同じ根本的な CPU オフライン関連の脆さへの対応だった。それらの最初の修正から7年後も、CPU オフライン関連のバグはまだそこにあった。ただ、より狭く、より発生させにくい形になっていただけである。
 
-!!! warning "Pattern to watch for"
-    Any deferred cleanup that depends on "the thing I'm waiting for will eventually happen" needs an explicit answer for "what if the resource I'm waiting to clean up on disappears first." If that answer lives in a different code path (here, CPU hotplug) than the one doing the deferring (here, interrupt affinity), audit the interaction directly — each path can be independently correct and still leak when the two overlap.
+!!! warning "注意すべきパターン"
+    「待っていることはいずれ起こる」に依存する遅延クリーンアップには、「クリーンアップを行う予定のリソースが先に消えたらどうなるか」に対する明示的な答えが必要である。その答えが、遅延を行うコードパス（ここでは割り込みアフィニティ）とは別のコードパス（ここでは CPU ホットプラグ）にあるなら、その相互作用を直接監査すること — 各パスは独立に正しくても、2つが重なったときにリークしうる。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [IRQ Affinity and CPU Isolation](../irq-affinity.md) — the affinity-configuration interface this bug's trigger goes through
-- [The Warning That Vector Space Was Silently Breaking Affinity](vector-exhaustion-silent-affinity-break.md) — a different bug in the same vector-allocation machinery, from the same era of the codebase
+- [IRQ アフィニティと CPU 分離](../irq-affinity.md) — このバグのきっかけが通るアフィニティ設定インターフェイス
+- [ベクタ空間が黙ってアフィニティを壊していたことを知らせる警告](vector-exhaustion-silent-affinity-break.md) — 同じベクタ割り当て機構における、コードベースの同じ時期の別のバグ
 
-## External references {#external-references}
+## 外部参考文献 {#external-references}
 
-- [git.kernel.org: a6c11c0a5235](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a6c11c0a5235) — "genirq/cpuhotplug, x86/vector: Prevent vector leak during CPU offline," the fix commit, with the full root-cause writeup in its own commit message
-- [NVD: CVE-2024-31076](https://nvd.nist.gov/vuln/detail/CVE-2024-31076) — the CVE record, which reproduces the fix commit's description in full
-- [git.kernel.org: f0383c24b485](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f0383c24b4855f6a4b5a358c7b2d2c16e0437e9b) — "genirq/cpuhotplug: Add support for cleaning up move in progress," the June 2017 commit (Linux 4.13) the fix's own `Fixes:` tag points to, and the actual origin of the generic fixup machinery this bug's race lives in
-- [LWN: x86: Rework the vector management](https://lwn.net/Articles/733618/) — Thomas Gleixner's September 2017 cover letter for the 52-patch series that introduced the `vector_matrix`/`apicd` design (Linux 4.15), a few months after and separate from the commit above, explicitly motivated in part by CPU-offline and hibernation fragility in the prior implementation
+- [git.kernel.org: a6c11c0a5235](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a6c11c0a5235) — "genirq/cpuhotplug, x86/vector: Prevent vector leak during CPU offline"、修正コミット。コミットメッセージ自体に根本原因の完全な説明がある
+- [NVD: CVE-2024-31076](https://nvd.nist.gov/vuln/detail/CVE-2024-31076) — CVE レコード。修正コミットの説明を全文転載している
+- [git.kernel.org: f0383c24b485](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f0383c24b4855f6a4b5a358c7b2d2c16e0437e9b) — "genirq/cpuhotplug: Add support for cleaning up move in progress"、修正自身の `Fixes:` タグが指す2017年6月のコミット（Linux 4.13）。このバグの競合が存在する汎用の後始末機構の実際の起源
+- [LWN: x86: Rework the vector management](https://lwn.net/Articles/733618/) — `vector_matrix`/`apicd` 設計を導入した52パッチのシリーズ（Linux 4.15）に対する、Thomas Gleixner の2017年9月のカバーレター。上記のコミットの数か月後の、それとは別の変更であり、明示的に、以前の実装における CPU オフラインとハイバネーションの脆さを動機の一部としている

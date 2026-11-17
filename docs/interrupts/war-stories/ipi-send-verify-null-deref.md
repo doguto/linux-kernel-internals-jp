@@ -1,52 +1,52 @@
-# The IPI Verifier That Trusted Its Own Caller {#the-ipi-verifier-that-trusted-its-own-caller}
+# 呼び出し元を信用したIPI検証器 {#the-ipi-verifier-that-trusted-its-own-caller}
 
-> A validation function meant to catch bad interrupt handles read one of its own fields before checking whether that field existed, turning an invalid IPI number into a kernel oops instead of a clean error
+> 不正な割り込みハンドルを捕まえるための検証関数が、あるフィールドの存在を確認する前にそのフィールドを読んでいたため、不正なIPI番号がきれいなエラーではなくカーネルoopsになっていた
 
-Landed
-:   Linux 6.3 (April 2023) · fix authored August 17, 2022
+収録
+:   Linux 6.3（2023年4月）· 修正の作成は2022年8月17日
 
-Authors
+作者
 :   Sergey Shtylyov
 
 CVE
 :   CVE-2023-53332
 
-*Part of [War Stories: Interrupt and IRQ-Affinity Bugs](../war-stories.md).*
+*[事件簿: 割り込みとIRQアフィニティのバグ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-Sending an inter-processor interrupt through the generic IPI layer — `ipi_send_mask()` or `ipi_send_single()` — routes through `ipi_send_verify()` first, a function whose entire job is to validate the request before anything touches hardware: is the IRQ chip valid, does it support sending IPIs at all, is the destination CPU in range, and does the requested destination mask fit within the IPI's own affinity mask. That last check needs the IPI's affinity mask, which the original code fetched via `irq_data_get_affinity_mask(data)` as the very first thing the function did — before any of its other validation ran.
+汎用IPIレイヤー（`ipi_send_mask()` または `ipi_send_single()`）を通じてプロセッサ間割り込みを送信すると、まず `ipi_send_verify()` を経由する。この関数の役割は、ハードウェアに何かが触れる前にリクエストを検証することだけである。IRQチップは有効か、そもそもIPIの送信をサポートしているか、宛先CPUは範囲内か、そして要求された宛先マスクがIPI自身のアフィニティマスクに収まっているか。最後のチェックにはIPIのアフィニティマスクが必要であり、元のコードはそれを `irq_data_get_affinity_mask(data)` で取得していた。しかもそれは関数が最初に行う処理であり、他のどの検証よりも前に実行されていた。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-If `ipi_send_mask()` or `ipi_send_single()` is called with an invalid interrupt number, the `struct irq_data *data` pointer that `ipi_send_verify()` receives is `NULL`. The function's very first line called `irq_data_get_affinity_mask(data)` unconditionally, dereferencing that `NULL` pointer before the function had validated anything, including the one thing it should have checked first: whether it had been handed a real interrupt descriptor at all.
+`ipi_send_mask()` や `ipi_send_single()` が不正な割り込み番号で呼ばれると、`ipi_send_verify()` が受け取る `struct irq_data *data` ポインタは `NULL` になる。関数の最初の行は無条件に `irq_data_get_affinity_mask(data)` を呼んでおり、関数が何かを検証する前にその `NULL` ポインタを参照外ししていた。最初に確認すべきだったこと、すなわち本物の割り込みディスクリプタを渡されたのかどうかさえ確認する前にである。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The result is a kernel oops from inside a helper that a caller supplying a bad interrupt number should have been able to trust to fail cleanly with an error code, not crash. The bug was found not through a crash report from the field, but by the Linux Verification Center's static analysis tooling (SVACE) — the kind of NULL-dereference-on-an-unchecked-pointer pattern static analysis is specifically good at catching before anyone hits it at runtime.
+結果はヘルパー内部からのカーネルoopsである。不正な割り込み番号を渡した呼び出し元は、このヘルパーがクラッシュせずエラーコードできれいに失敗してくれると信頼できるはずだった。このバグは現場からのクラッシュ報告ではなく、Linux Verification Centerの静的解析ツール（SVACE）によって発見された。チェックされていないポインタのNULL参照外しというパターンは、誰かが実行時に踏む前に静的解析が特に得意として捕まえる種類のものである。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The function did have a NULL check, just aimed at the wrong variable and placed after the dereference it should have guarded. The original code read `if (!chip || !ipimask) return -EINVAL;` — checking whether the *affinity mask itself* came back NULL, which can legitimately happen for reasons unrelated to `data` being invalid. But by the time that check ran, `irq_data_get_affinity_mask(data)` had already been called on the very first line of the function, so a NULL `data` pointer had already been dereferenced before the function's own validation logic ever got a chance to reject it. The check that would have caught the real problem — is `data` itself non-NULL — didn't exist at all.
+関数にはNULLチェックがあった。ただし対象の変数を間違えており、しかも守るべき参照外しの後に置かれていた。元のコードは `if (!chip || !ipimask) return -EINVAL;` となっており、*アフィニティマスク自体*がNULLで返ってきたかどうかをチェックしていた。これは `data` が不正であることとは無関係な理由で正当に起こりうる。しかしそのチェックが実行される時点では、関数の最初の行ですでに `irq_data_get_affinity_mask(data)` が呼ばれていたため、関数自身の検証ロジックが拒否する機会を得る前に、NULLの `data` ポインタはすでに参照外しされていた。本当の問題、つまり `data` 自体が非NULLかどうかを捕まえるはずのチェックは、まったく存在しなかった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-The fix reorders the function: it no longer calls `irq_data_get_affinity_mask()` until after `chip` and `data` have both been confirmed non-NULL and the destination CPU number has been range-checked. Only once those checks pass does the function fetch the affinity mask and check *that* for NULL separately, preserving the original mask-specific validation without ever dereferencing `data` before confirming it exists.
+修正は関数の順序を入れ替える。`chip` と `data` の両方が非NULLであることを確認し、宛先CPU番号の範囲チェックを済ませるまで、`irq_data_get_affinity_mask()` を呼ばないようにした。それらのチェックを通過して初めてアフィニティマスクを取得し、*それ*がNULLかどうかを別途チェックする。これにより、元のマスク固有の検証を維持しつつ、`data` の存在を確認する前に参照外しすることがなくなった。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A NULL check anywhere in a function doesn't mean the function is protected against NULL — only the specific pointer that check tests, and only for code that runs after it.** This function had validation logic; it just validated the wrong thing before the dangerous dereference happened, which gave a false sense that the "well, we do check for NULL" box was already checked.
+**関数のどこかにNULLチェックがあるからといって、その関数がNULLから守られているわけではない。守られるのはそのチェックが調べる特定のポインタだけであり、しかもチェックの後に実行されるコードに対してだけである。** この関数には検証ロジックがあった。ただ危険な参照外しが起こる前に間違ったものを検証していただけであり、そのせいで「NULLチェックならちゃんとしている」という項目がすでに満たされているかのような錯覚を与えていた。
 
-**Static analysis catches exactly this shape of bug better than most manual review does**, because a human reading `if (!chip || !ipimask) return -EINVAL;` sees a NULL check right there in the function and tends to move on, without separately tracing whether every value used *before* that line was already validated.
+**静的解析は、まさにこの形のバグを多くの手動レビューよりもうまく捕まえる。** 人間が `if (!chip || !ipimask) return -EINVAL;` を読むと、関数内にNULLチェックがあることを見て次へ進みがちであり、その行より*前*で使われているすべての値がすでに検証済みかどうかを個別に追跡しないからである。
 
-!!! warning "Pattern to watch for"
-    When a function computes a value from a parameter and validates that parameter somewhere in the same function, check whether the computation happens before or after the validation — a NULL check later in the function provides no protection for a dereference earlier in it, no matter how defensive the function looks as a whole.
+!!! warning "注意すべきパターン"
+    関数が引数から値を計算し、同じ関数内のどこかでその引数を検証している場合、計算が検証の前か後かを確認すること。関数の後半にあるNULLチェックは、関数全体がどれほど防御的に見えても、前半の参照外しを何ら保護しない。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Interrupt Handling Overview](../interrupts.md) — where `struct irq_data` and the generic IPI layer fit in the broader interrupt-handling path
+- [割り込み処理の概要](../interrupts.md) — `struct irq_data` と汎用IPIレイヤーが、より広い割り込み処理パスの中でどこに位置するか
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: feabecaff590](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=feabecaff5902f896531dde90646ca5dfa9d4f7d) — "genirq/ipi: Fix NULL pointer deref in irq_data_get_affinity_mask()," the upstream fix, authored by Sergey Shtylyov and carried into mainline by Thomas Gleixner
-- [NVD: CVE-2023-53332](https://nvd.nist.gov/vuln/detail/CVE-2023-53332) — the CVE record; the "2023" in the identifier matches the year the fix actually landed (Linux 6.3, April 2023) — the identifier itself was formally reserved and published later, in September 2025, once the kernel's own CVE-assignment process got around to this fix
+- [git.kernel.org: feabecaff590](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=feabecaff5902f896531dde90646ca5dfa9d4f7d) — "genirq/ipi: Fix NULL pointer deref in irq_data_get_affinity_mask()"、アップストリームの修正。Sergey Shtylyovが作成し、Thomas Gleixnerがメインラインに取り込んだ
+- [NVD: CVE-2023-53332](https://nvd.nist.gov/vuln/detail/CVE-2023-53332) — CVEレコード。識別子の「2023」は修正が実際にマージされた年（Linux 6.3、2023年4月）と一致する。識別子自体は、カーネル独自のCVE割り当てプロセスがこの修正に取りかかった後の2025年9月に、正式に予約・公開された

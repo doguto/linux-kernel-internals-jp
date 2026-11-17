@@ -1,70 +1,70 @@
-# The PI-Futex Fixup That Had No Answer for a Permanent Fault {#the-pi-futex-fixup-that-had-no-answer-for-a-permanent-fault}
+# 永続的なフォールトに答えを持たなかったPI-futexの修正処理 {#the-pi-futex-fixup-that-had-no-answer-for-a-permanent-fault}
 
-> CVE-2021-3347 — when the kernel couldn't write the new owner's TID back into a PI futex word, it gave up without making its own rt_mutex and pi_state agree on who owned the lock, and a subsequent unlock on that mismatch corrupted a waiter structure still resident on another task's kernel stack
+> CVE-2021-3347 — カーネルが新しい所有者のTIDをPI futexワードに書き戻せなかったとき、自身のrt_mutexとpi_stateの間でロックの所有者についての認識を一致させないまま諦めていた。その不一致の上で後続のアンロックが行われると、別のタスクのカーネルスタック上にまだ存在する待機者構造体が破壊された
 
-Disclosed
-:   January 29, 2021 (CVE reserved and published same day, NVD)
+公開
+:   2021年1月29日（CVEの予約と公開は同日、NVD）
 
-Reported by
-:   gzobqq@gmail.com (per the fix commit's `Reported-by:` trailer)
+報告者
+:   gzobqq@gmail.com（修正コミットの `Reported-by:` トレーラーによる）
 
 CVSS
-:   7.8 HIGH (`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`)
+:   7.8 HIGH（`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`）
 
-Bug present since
-:   2.6.26 (2008), when `fixup_pi_state_owner()`'s retry-on-fault logic was introduced
+バグの存在期間
+:   `fixup_pi_state_owner()` のフォールト時リトライロジックが導入された2.6.26（2008年）以降
 
-Fixed in
-:   commit `34b1a1ce1458`, part of a 7-patch PI-futex series merged into Linus's tree January 28, 2021; first released as part of Linux 5.11-rc6 (January 31, 2021)
+修正
+:   コミット `34b1a1ce1458`。2021年1月28日にLinusのツリーにマージされた7パッチからなるPI-futexシリーズの一部。最初のリリースはLinux 5.11-rc6（2021年1月31日）
 
-Exploit tool
-:   no public PoC found
+エクスプロイトツール
+:   公開PoCは見つかっていない
 
-Actively exploited
-:   no confirmed cases (not on CISA KEV)
+実際の悪用
+:   確認された事例なし（CISA KEVには未掲載）
 
-*Part of [War Stories: Locking and Synchronization Bugs](../war-stories.md).*
+*[事件簿: ロックと同期のバグ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-A PI (priority-inheritance) futex ties three things together, and the kernel's own documentation states plainly that they must never disagree: the TID written in the userspace futex word, `pi_state->owner`, and the owner field inside the attached kernel `rt_mutex`. `fixup_pi_state_owner()` exists to restore that agreement at the one place it can legitimately drift — after a fault-handling retry — before the task returns to userspace.
+PI（優先度継承）futexは3つのものを結び付けており、カーネル自身のドキュメントはそれらが決して食い違ってはならないとはっきり述べている。ユーザー空間のfutexワードに書かれたTID、`pi_state->owner`、そして付随するカーネルの `rt_mutex` 内部の所有者フィールドである。`fixup_pi_state_owner()` は、それらが正当にずれうる唯一の場所（フォールト処理のリトライ後）で、タスクがユーザー空間に戻る前にその一致を回復するために存在する。
 
-`1b7558e457ed` ("futexes: fix fault handling in futex_lock_pi"), from 2008, gave this function its central retry pattern: write the new owner's TID into the userspace futex word, and if that write faults — because the page was swapped out or a COW fault needs resolving — drop the hash-bucket lock, call `futex_handle_fault()` (later renamed `fault_in_user_writeable()`) to fault the page back in, and retry. That handled the *transient* case, which was the only case the commit's author had reason to think about: a fault that resolves once the page is back.
+2008年の `1b7558e457ed`（"futexes: fix fault handling in futex_lock_pi"）は、この関数に中心となるリトライのパターンを与えた。新しい所有者のTIDをユーザー空間のfutexワードに書き込み、ページがスワップアウトされていたりCOWフォールトの解決が必要だったりしてその書き込みがフォールトした場合は、ハッシュバケットのロックを解放し、`futex_handle_fault()`（後に `fault_in_user_writeable()` に改名）を呼んでページをフォールトインし、リトライする。これは*一時的な*ケース、つまりページが戻れば解決するフォールトを扱っており、コミットの作者が考える理由のあった唯一のケースだった。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Not every fault resolves. If `fault_in_user_writeable()` itself fails — the mapping is genuinely gone, unwritable, or otherwise permanently broken — the 2008 code had no second plan. It returned `-EFAULT` and left the rtmutex and pi_state owner fields exactly where they'd been before the (never-completed) userspace write: potentially still pointing at the *previous* owner, while the *new* owner was left holding the rt_mutex or believing it owned the futex. The three-way invariant — userspace TID, `pi_state->owner`, rt_mutex owner — was now violated, with no path back to consistency and no code that treated this outcome as anything other than an ordinary, resolvable retry failure.
+すべてのフォールトが解決するわけではない。`fault_in_user_writeable()` 自体が失敗した場合（マッピングが本当になくなっている、書き込み不可である、あるいはその他の理由で永続的に壊れている）、2008年のコードには次の手がなかった。`-EFAULT` を返し、rtmutexとpi_stateの所有者フィールドを、（完了しなかった）ユーザー空間への書き込みの前の状態のまま放置した。それらは*以前の*所有者を指したままかもしれず、一方で*新しい*所有者はrt_mutexを保持しているか、futexを所有していると信じたままになっていた。三者間の不変条件（ユーザー空間のTID、`pi_state->owner`、rt_mutexの所有者）は今や破られており、一貫性に戻る道はなく、この結果を通常の解決可能なリトライ失敗以外のものとして扱うコードもなかった。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-A subsequent `futex_unlock_pi()` trusts `pi_state` to decide what to unlock. Operating on the now-inconsistent state, it could release an rt_mutex the calling task didn't actually own — corrupting the rt_mutex's internal waiter rbtree. The fix commit states the consequence directly: this "can corrupt the RB tree of the rtmutex and cause a subsequent kernel stack use after free." An `rt_mutex_waiter` normally lives on a *blocked task's own kernel stack* for the duration of the block; unlocking a mutex that task didn't actually still legitimately hold could free (or otherwise invalidate) a waiter structure that a still-running or since-returned task's stack region was relying on staying valid — a use-after-free reachable from ordinary PI-futex usage, no special privileges required beyond being able to create the racing fault condition in the first place.
+後続の `futex_unlock_pi()` は、何をアンロックするかを決めるのに `pi_state` を信頼する。今や一貫性を失った状態の上で動作すると、呼び出し元のタスクが実際には所有していないrt_mutexを解放し、rt_mutexの内部の待機者rbtreeを破壊する可能性があった。修正コミットはその帰結を直接述べている。これは "can corrupt the RB tree of the rtmutex and cause a subsequent kernel stack use after free"（訳: rtmutexのRBツリーを破壊し、後続のカーネルスタックのuse-after-freeを引き起こしうる）である。`rt_mutex_waiter` は通常、ブロックの間*ブロックされたタスク自身のカーネルスタック*上に存在する。そのタスクがもはや正当に保持していないmutexをアンロックすると、まだ実行中の、あるいはすでに戻ったタスクのスタック領域が有効であり続けることを当てにしていた待機者構造体を解放（あるいは無効化）しうる。これは通常のPI-futexの使用から到達可能なuse-after-freeであり、そもそも競合するフォールト条件を作り出せること以外に特別な権限は必要ない。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The 2008 fix was correct about the problem it set out to solve — a real, observed failure in "highly threaded java apps on large SMP systems" caused by a resolvable race between a futex unlock and a concurrent fork or page swap. It reasoned carefully about *that* fault, and built a retry loop that handled it. It just never considered the fault that *doesn't* resolve — a case the original bug report didn't produce, so nothing forced anyone to ask "and what if `fault_in_user_writeable()` itself fails?" The gap wasn't sloppiness in the retry logic; it was a genuinely unconsidered branch of the state space, one that stayed latent for thirteen years until a review of the PI-futex fault paths specifically went looking for it.
+2008年の修正は、解決しようとした問題については正しかった。futexのアンロックと並行するforkやページスワップとの間の解決可能な競合によって引き起こされた、「大規模SMPシステム上の高度にマルチスレッド化されたJavaアプリ」における実際に観測された障害である。それは*その*フォールトについて注意深く推論し、それを扱うリトライループを構築した。ただ、解決*しない*フォールトをまったく考慮しなかった。元のバグ報告ではそのケースが生じなかったので、「では `fault_in_user_writeable()` 自体が失敗したら?」と誰かに問わせるものは何もなかった。隙間はリトライロジックのずさんさではなく、状態空間の中で本当に考慮されていなかった分岐であり、PI-futexのフォールトパスのレビューがまさにそれを探しに行くまで、13年間潜伏し続けた。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`34b1a1ce1458` ("futex: Handle faults correctly for PI futexes") replaces "give up and leave things inconsistent" with "give up and make the *kernel's own* state consistent, even though userspace can't be fixed." When the userspace write is unrecoverable, the fix now calls `pi_state_update_owner(pi_state, rt_mutex_owner(&pi_state->pi_mutex))` — pinning `pi_state->owner` to whatever the rt_mutex itself actually says, rather than leaving the two to disagree. Userspace's futex word is left wrong, but any *subsequent* operation on that futex will now correctly fail, per the same invariant table this bug violated, rather than operating on a lock whose kernel-side bookkeeping was already split. The commit also removes a separate, similarly-dangerous fixup path in `futex_lock_pi()`/`futex_wait_requeue_pi()` that could unconditionally call `rt_mutex_futex_unlock()` on a `pi_state` in this same inconsistent condition.
+`34b1a1ce1458`（"futex: Handle faults correctly for PI futexes"）は、「諦めて不整合なまま放置する」を「諦めるが、ユーザー空間は直せなくても*カーネル自身の*状態は一貫させる」に置き換える。ユーザー空間への書き込みが回復不能な場合、修正は `pi_state_update_owner(pi_state, rt_mutex_owner(&pi_state->pi_mutex))` を呼ぶようになった。両者を食い違わせたままにするのではなく、`pi_state->owner` をrt_mutex自体が実際に示しているものに合わせるのである。ユーザー空間のfutexワードは誤ったままになるが、そのfutexに対する*後続の*操作は、カーネル側の管理情報がすでに分裂したロックの上で動作するのではなく、このバグが違反したのと同じ不変条件の表に従って、正しく失敗するようになる。コミットはまた、`futex_lock_pi()`/`futex_wait_requeue_pi()` にあった、同様に危険な別の修正処理パスも削除している。そのパスは、この同じ不整合状態にある `pi_state` に対して無条件に `rt_mutex_futex_unlock()` を呼びうるものだった。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A retry loop is only as safe as its "retry failed permanently" branch — and that branch is easy to leave unwritten if the original bug report never exercised it.** The 2008 fix handled every fault its authors could reproduce. The 2021 fix handled the one fault type nobody had reproduced yet: a `fault_in_user_writeable()` call that itself doesn't succeed.
+**リトライループの安全性は、その「リトライが永続的に失敗した」分岐の安全性で決まる。そしてその分岐は、元のバグ報告で一度も実行されなかった場合、書かれないまま残りやすい。** 2008年の修正は、作者たちが再現できたすべてのフォールトを扱った。2021年の修正は、まだ誰も再現していなかった1種類のフォールト、すなわち `fault_in_user_writeable()` の呼び出し自体が成功しない場合を扱った。
 
-**When kernel state and userspace state can't both be fixed, fix the one that other kernel code depends on being correct.** Userspace's futex word was going to be wrong either way once the mapping was genuinely broken — the fix's real insight was that leaving the *kernel's* internal bookkeeping consistent is what actually matters, since it's the kernel's own unlock path, not userspace, that trusts `pi_state` unconditionally.
+**カーネルの状態とユーザー空間の状態の両方を直せないときは、他のカーネルコードが正しいことを前提にしているほうを直せ。** マッピングが本当に壊れてしまえば、ユーザー空間のfutexワードはどのみち誤ったものになる。修正の本当の洞察は、重要なのは*カーネルの*内部管理情報を一貫させておくことだという点にあった。`pi_state` を無条件に信頼するのはユーザー空間ではなく、カーネル自身のアンロックパスだからである。
 
-!!! warning "Pattern to watch for"
-    Any retry-on-fault loop that assumes the fault will eventually resolve needs an explicit, audited answer for the case where it doesn't — not just an early return that leaves partially-updated cross-referencing state (here: three fields across two structures) out of sync. If two or more pieces of state must agree by invariant, a fault-handling bailout path is exactly where that invariant is easiest to silently break.
+!!! warning "注意すべきパターン"
+    フォールトがいずれ解決すると仮定するフォールト時リトライループには、解決しない場合についての明示的で監査済みの答えが必要である。部分的に更新された相互参照する状態（ここでは2つの構造体にまたがる3つのフィールド）を不一致のまま残す早期リターンだけでは不十分である。2つ以上の状態が不変条件として一致しなければならない場合、フォールト処理の脱出パスこそ、その不変条件が最も黙って破られやすい場所である。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Locking Overview](../README.md) — spinlocks, rt_mutex, and the priority-inheritance machinery this bug lives in
-- [The PI-Mutex Origin Story](pi-mutex-origin.md) — how rt_mutex and PI futexes came to exist in the first place
-- [The rt_mutex Deadlock Detector's Atomic-Sleep Bug](rtmutex-deadlock-detector-atomic-sleep.md) — a second rt_mutex correctness bug, on the deadlock-detection side rather than the fixup side
+- [ロックの概要](../README.md) — spinlock、rt_mutex、そしてこのバグが存在する優先度継承の機構
+- [PI-mutex誕生の経緯](pi-mutex-origin.md) — そもそもrt_mutexとPI futexがどのようにして生まれたか
+- [アトミックコンテキストでスケジュールしたデッドロック検出器](rtmutex-deadlock-detector-atomic-sleep.md) — 修正処理の側ではなくデッドロック検出の側における、2つ目のrt_mutexの正しさのバグ
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: 34b1a1ce1458](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=34b1a1ce1458f50ef27c54e28eb9b1947012907a) — "futex: Handle faults correctly for PI futexes," the fix
-- [git.kernel.org: 1b7558e457ed](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1b7558e457ed0de61023cfc913d2c342c7c3d9f2) — "futexes: fix fault handling in futex_lock_pi," the 2008 commit whose retry logic never covered a permanent fault
-- [oss-security: Linux Kernel local priv escalation via futexes](https://www.openwall.com/lists/oss-security/2021/01/29/1) — Marcus Meissner's CVE request, quoting the merge that introduced the fix
-- [NVD: CVE-2021-3347](https://nvd.nist.gov/vuln/detail/CVE-2021-3347) — CVE record, CVSS 7.8 HIGH, published January 29, 2021
+- [git.kernel.org: 34b1a1ce1458](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=34b1a1ce1458f50ef27c54e28eb9b1947012907a) — "futex: Handle faults correctly for PI futexes"、修正
+- [git.kernel.org: 1b7558e457ed](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1b7558e457ed0de61023cfc913d2c342c7c3d9f2) — "futexes: fix fault handling in futex_lock_pi"、リトライロジックが永続的なフォールトを一度もカバーしなかった2008年のコミット
+- [oss-security: Linux Kernel local priv escalation via futexes](https://www.openwall.com/lists/oss-security/2021/01/29/1) — Marcus MeissnerによるCVEリクエスト。修正を導入したマージを引用している
+- [NVD: CVE-2021-3347](https://nvd.nist.gov/vuln/detail/CVE-2021-3347) — CVEレコード、CVSS 7.8 HIGH、2021年1月29日公開

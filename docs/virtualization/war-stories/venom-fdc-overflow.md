@@ -1,73 +1,73 @@
-# VENOM: The Floppy Controller Nobody Turned Off {#venom-the-floppy-controller-nobody-turned-off}
+# VENOM：誰も無効化しなかったフロッピーコントローラ {#venom-the-floppy-controller-nobody-turned-off}
 
-> CVE-2015-3456 — QEMU's floppy disk controller emulation is instantiated for every default x86 machine type whether or not a guest has a floppy drive configured, and its command FIFO had no bounds check at all — a guest that never touched a floppy could still overflow it straight into the host's heap
+> CVE-2015-3456 — QEMU のフロッピーディスクコントローラのエミュレーションは、ゲストにフロッピードライブが設定されているかどうかにかかわらず、デフォルトのすべての x86 マシンタイプでインスタンス化される。そしてそのコマンド FIFO には境界チェックがまったくなかった — フロッピーに一度も触れたことのないゲストでも、それをオーバーフローさせてホストのヒープに直接書き込めた
 
-Disclosed
-:   May 13, 2015 (coordinated disclosure, CrowdStrike)
+公開日
+:   2015年5月13日（協調的開示、CrowdStrike）
 
-Reported by
-:   Jason Geffner, CrowdStrike (per Xen Security Advisory XSA-133's credits section)
+報告者
+:   Jason Geffner、CrowdStrike（Xen Security Advisory XSA-133 のクレジット欄による）
 
 CVSS
-:   7.7 (CVSS v2, `AV:A/AC:L/Au:S/C:C/I:C/A:C` — no CVSS v3 score was ever assigned)
+:   7.7（CVSS v2、`AV:A/AC:L/Au:S/C:C/I:C/A:C` — CVSS v3 のスコアは一度も付与されていない）
 
-Bug present since
-:   the FDC emulation file's own copyright headers date to 2003, over a decade before disclosure
+バグの混入時期
+:   FDC エミュレーションのファイル自身の著作権ヘッダは2003年にさかのぼり、開示の10年以上前である
 
-Fixed in
-:   commit `e907746266721`, QEMU (not the Linux kernel — this bug lives entirely in QEMU's device-emulation userspace code), May 12, 2015
+修正
+:   commit `e907746266721`、QEMU（Linux カーネルではない — このバグは完全に QEMU のデバイスエミュレーション用ユーザー空間コードの中にある）、2015年5月12日
 
-Exploit tool
-:   no public working exploit independently confirmed
+エクスプロイトツール
+:   独立に確認された、動作する公開エクスプロイトはない
 
-Actively exploited
-:   no confirmed cases (not on CISA KEV)
+実際の悪用
+:   確認された事例はない（CISA KEV には掲載されていない）
 
-*Part of [War Stories: Virtualization (KVM) Bugs and Escapes](../war-stories.md).*
+*[事件簿：仮想化（KVM）のバグとエスケープ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-QEMU's Floppy Disk Controller emulation (`hw/block/fdc.c`) models the Intel 82078 controller chip, command FIFO and all. Since floppy drives predate every modern x86 machine type by decades but the PC platform's device model still assumes one might exist, `pc_basic_device_init()` instantiates the FDC unconditionally for the default PIIX and ICH9 machine types — no check for whether the user configured `-drive if=floppy` or any floppy media at all. A guest with no floppy drive attached still has a live, guest-accessible FDC at the standard I/O ports, because both KVM's QEMU and Xen's HVM device model share this same code.
+QEMU のフロッピーディスクコントローラ（FDC）エミュレーション（`hw/block/fdc.c`）は、Intel 82078 コントローラチップを、コマンド FIFO も含めてモデル化している。フロッピードライブは現代のどの x86 マシンタイプよりも数十年古いが、PC プラットフォームのデバイスモデルは依然としてそれが存在しうると想定しているため、`pc_basic_device_init()` はデフォルトの PIIX および ICH9 マシンタイプに対して FDC を無条件にインスタンス化する — ユーザーが `-drive if=floppy` やフロッピーメディアを設定したかどうかのチェックは一切ない。フロッピードライブが接続されていないゲストでも、標準の I/O ポートに、ゲストからアクセス可能な動作中の FDC が存在する。KVM の QEMU と Xen の HVM デバイスモデルが、同じこのコードを共有しているからである。
 
-The FDC's command FIFO is a fixed 512-byte heap buffer (`fdctrl->fifo = qemu_memalign(512, FD_SECTOR_LEN)`, `FD_SECTOR_LEN` = 512), used for both command/parameter bytes and PIO sector-data staging. `fdctrl_write_data()`'s job is straightforward: index into that buffer with `fdctrl->data_pos`, write the guest-supplied byte, increment. Under ordinary operation, whatever command handler is running resets `data_pos` back to zero once it has consumed the parameters it needs — so the index never has a chance to run away.
+FDC のコマンド FIFO は固定512バイトのヒープバッファ（`fdctrl->fifo = qemu_memalign(512, FD_SECTOR_LEN)`、`FD_SECTOR_LEN` = 512）で、コマンド/パラメータのバイトと、PIO のセクタデータのステージングの両方に使われる。`fdctrl_write_data()` の仕事は単純である。`fdctrl->data_pos` でそのバッファにインデックスし、ゲストが渡したバイトを書き込み、インクリメントする。通常の動作では、実行中のコマンドハンドラが、必要なパラメータを消費し終えた時点で `data_pos` をゼロに戻すので、インデックスが暴走する機会はない。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Two command handlers don't reset it. `FD_CMD_READ_ID` arms a one-shot 20-millisecond timer and returns immediately, without touching `data_pos`/`data_len` at all — the reset only happens later, when the timer fires. `FD_CMD_DRIVE_SPECIFICATION_COMMAND` only resets the FIFO if the final parameter byte has a specific bit set; if a guest sends that byte with the bit clear, the handler does nothing whatsoever — no reset, no state transition, no error.
+2つのコマンドハンドラはそれをリセットしない。`FD_CMD_READ_ID` は一回限りの20ミリ秒タイマーを設定してすぐに戻り、`data_pos`/`data_len` には一切触れない — リセットはタイマーが発火した後で初めて行われる。`FD_CMD_DRIVE_SPECIFICATION_COMMAND` は、最後のパラメータバイトに特定のビットが立っている場合にしか FIFO をリセットしない。ゲストがそのビットをクリアしたバイトを送ると、ハンドラはまったく何もしない — リセットも、状態遷移も、エラーもない。
 
-Either way, the controller is left in "still expecting FIFO writes" state with `data_pos` untouched. `fdctrl_write_data()` had no bound of its own — it trusted the command handlers to keep `data_pos` in range by resetting it. A guest that issues one of these two commands and then just keeps writing to the FDC's data port (`0x3f5`) drives `data_pos` past 512 with nothing to stop it, one guest-controlled byte at a time, straight past the end of the heap-allocated FIFO buffer.
+いずれの場合も、コントローラは `data_pos` に手を付けないまま「まだ FIFO への書き込みを待っている」状態に置かれる。`fdctrl_write_data()` には独自の境界がなかった — `data_pos` をリセットすることで範囲内に保つのはコマンドハンドラの役目だと信頼していたのである。これら2つのコマンドのいずれかを発行し、その後 FDC のデータポート（`0x3f5`）に書き込み続けるだけのゲストは、止めるものが何もないまま、ゲストが制御する1バイトずつ `data_pos` を512より先へ進め、ヒープに割り当てられた FIFO バッファの末尾をそのまま越えていく。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-This is a classic heap buffer overflow with both the content and the length under full guest control — a guest process needs no special privilege beyond ordinary I/O-port access to trigger it, and no floppy drive needs to be configured for the FDC to be present and vulnerable. Red Hat's technical analysis of the flaw summarized the impact plainly: an attacker able to corrupt adjacent heap memory in the host QEMU process this way has a path to a full guest-to-host virtual machine escape — arbitrary code execution on the host, not merely a guest or QEMU-process crash. Because the same vulnerable FDC code is shared by KVM's QEMU and by Xen's HVM device model (both the historical `qemu-xen-traditional` and the upstream-QEMU-based device model, per Xen's own advisory XSA-133), the practical exposure spanned both major open-source hypervisor stacks — any x86 HVM guest without a stub-domain was affected, regardless of what device the guest administrator thought they'd configured.
+これは、内容と長さの両方が完全にゲストの制御下にある、典型的なヒープバッファオーバーフローである — ゲストのプロセスは、それを起動するのに通常の I/O ポートアクセス以上の特別な特権を必要とせず、FDC が存在して脆弱であるためにフロッピードライブを設定する必要もない。Red Hat によるこの欠陥の技術解析は、影響を平易にまとめている。この方法でホストの QEMU プロセス内の隣接ヒープメモリを破壊できる攻撃者は、ゲストからホストへの完全な仮想マシンエスケープ — 単なるゲストや QEMU プロセスのクラッシュではなく、ホスト上での任意コード実行 — への道を持つ。同じ脆弱な FDC コードは KVM の QEMU と Xen の HVM デバイスモデル（Xen 自身のアドバイザリ XSA-133 によれば、歴史的な `qemu-xen-traditional` とアップストリーム QEMU ベースのデバイスモデルの両方）で共有されているので、実際の露出範囲は2大オープンソースハイパーバイザのスタックの両方にまたがっていた — スタブドメインを使っていない x86 HVM ゲストはすべて、ゲストの管理者がどのデバイスを設定したつもりでいたかに関係なく影響を受けた。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The FDC's command handlers were written under an implicit, undocumented contract: every command must either consume exactly its declared parameters and then reset the FIFO index, or the FIFO index simply won't advance further. `FD_CMD_READ_ID`'s deferred, timer-based reset and `FD_CMD_DRIVE_SPECIFICATION_COMMAND`'s conditional reset were each, on their own terms, reasonable implementations of a real hardware timing/protocol detail — real floppy controllers genuinely have asynchronous, multi-phase command sequences. Neither handler was written with an attacker in mind, and neither `fdctrl_write_data()` nor `fdctrl_read_data()` was written to defend itself against a command handler that (correctly, per spec) doesn't reset the index on every call. The bug is the gap between "the handlers usually reset the index" and "the buffer-access code assumes they always do."
+FDC のコマンドハンドラは、暗黙的で文書化されていない契約のもとで書かれていた。すべてのコマンドは、宣言されたパラメータをちょうど消費してから FIFO のインデックスをリセットするか、さもなければ FIFO のインデックスはそれ以上進まない、というものである。`FD_CMD_READ_ID` の遅延されたタイマーベースのリセットも、`FD_CMD_DRIVE_SPECIFICATION_COMMAND` の条件付きリセットも、それぞれそれ自体としては、実在するハードウェアのタイミング/プロトコルの詳細の妥当な実装だった — 実際のフロッピーコントローラは本当に、非同期で複数フェーズのコマンドシーケンスを持っている。どちらのハンドラも攻撃者を念頭に置いて書かれておらず、`fdctrl_write_data()` も `fdctrl_read_data()` も、（仕様どおり正しく）呼び出しのたびにはインデックスをリセットしないコマンドハンドラから自身を守るようには書かれていなかった。バグとは、「ハンドラは普通インデックスをリセットする」と「バッファアクセスのコードは、ハンドラが常にそうすると仮定している」との間の隙間である。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`e907746266721` ("fdc: force the fifo access to be in bounds of the allocated buffer") stops trusting the command handlers and bounds the buffer access directly: every FIFO index — in `fdctrl_read_data()`, `fdctrl_write_data()`, and `fdctrl_handle_drive_specification_command()` — is now taken modulo `FD_SECTOR_LEN` immediately before use. `data_pos` itself can still grow without limit, but the actual array index it produces is always clamped back into the allocated 512 bytes. A follow-up commit, `6cc8a11c84ddc`, separately tightened the controller's MSR "Request for Master" (RQM) status bit to correctly reflect whether the controller is actually expecting FIFO input at any given phase — a spec-correctness fix that further narrows when the FIFO can be driven at all, on top of the memory-safety fix that closes the overflow outright.
+`e907746266721`（"fdc: force the fifo access to be in bounds of the allocated buffer"）は、コマンドハンドラを信頼するのをやめ、バッファアクセスを直接制限する。`fdctrl_read_data()`、`fdctrl_write_data()`、`fdctrl_handle_drive_specification_command()` におけるすべての FIFO インデックスは、使用直前に `FD_SECTOR_LEN` を法とする剰余を取るようになった。`data_pos` 自体はなお際限なく増えうるが、それから得られる実際の配列インデックスは、常に割り当てられた512バイトの中に収められる。後続のコミット `6cc8a11c84ddc` は、それとは別に、コントローラの MSR の「Request for Master」（RQM）ステータスビットを厳密にし、各フェーズでコントローラが実際に FIFO 入力を待っているかどうかを正しく反映するようにした — これは仕様上の正しさに関する修正で、オーバーフローを完全に塞ぐメモリ安全性の修正に加えて、そもそも FIFO を駆動できるタイミングをさらに狭めるものである。
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**A buffer-access function that trusts its callers to keep an index in range needs its own bound, not a hope that every caller remembers to reset the index correctly.** Two command handlers, each independently reasonable in isolation, both happened to leave that implicit contract unfulfilled — and the buffer code had no defense of its own when they did.
+**インデックスを範囲内に保つことを呼び出し側に任せているバッファアクセス関数には、すべての呼び出し側がインデックスを正しくリセットするのを忘れないという期待ではなく、独自の境界が必要である。** 2つのコマンドハンドラは、それぞれ単体では妥当だったが、どちらもたまたまその暗黙の契約を果たさないままにしていた — そしてそうなったとき、バッファのコードには独自の防御がなかった。
 
-**Device emulation that's instantiated unconditionally is attack surface whether or not the corresponding hardware is "in use."** No floppy drive needed to be configured, mounted, or even present in the guest's boot order for this bug to be reachable — the FDC was live at the ports the moment the VM started, simply because the default machine type wires it up.
+**無条件にインスタンス化されるデバイスエミュレーションは、対応するハードウェアが「使用中」かどうかにかかわらず攻撃対象領域である。** このバグに到達するのに、フロッピードライブを設定する必要も、マウントする必要も、ゲストのブート順序に存在する必要すらなかった — デフォルトのマシンタイプがそれを配線しているというだけで、VM が起動した瞬間から FDC はポート上で動作していた。
 
-!!! warning "Pattern to watch for"
-    A legacy or rarely-used device model, kept around for compatibility and instantiated by default regardless of whether any guest actually uses it, is exactly the kind of code that stops getting security scrutiny while remaining fully guest-reachable. If a device is unconditionally present in a default machine type, its buffer-handling code needs the same defensive bounds-checking as anything a guest can reach directly — "nobody uses floppy drives anymore" is not a mitigation.
+!!! warning "注意すべきパターン"
+    互換性のために残され、実際にゲストが使うかどうかにかかわらずデフォルトでインスタンス化される、レガシーなあるいはめったに使われないデバイスモデルは、ゲストから完全に到達可能なままでありながら、セキュリティ上の精査を受けなくなる、まさにそのたぐいのコードである。デバイスがデフォルトのマシンタイプに無条件に存在するなら、そのバッファ処理コードには、ゲストが直接到達できる他のあらゆるものと同じ防御的な境界チェックが必要である — 「もう誰もフロッピードライブなんて使わない」は緩和策ではない。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [KVM Architecture](../kvm-arch.md) — the /dev/kvm API and QEMU's role as the userspace half of the virtualization stack
-- [KVM Exit Handling](../kvm-exits.md) — how guest I/O-port accesses like the FDC's data port reach QEMU's device-emulation code
-- [The Deadlock Detector That Scheduled While Atomic](../../locking/war-stories/rtmutex-deadlock-detector-atomic-sleep.md) — a comparably narrow gap in trusted-caller assumptions, in an unrelated subsystem
+- [KVM アーキテクチャ](../kvm-arch.md) — /dev/kvm API と、仮想化スタックのユーザー空間側としての QEMU の役割
+- [KVM の Exit 処理](../kvm-exits.md) — FDC のデータポートのようなゲストの I/O ポートアクセスが、どのように QEMU のデバイスエミュレーションコードに到達するか
+- [アトミックコンテキストでスケジュールしたデッドロック検出器](../../locking/war-stories/rtmutex-deadlock-detector-atomic-sleep.md) — 無関係なサブシステムにおける、呼び出し側を信頼する仮定の、同程度に狭い隙間
 
-## External references {#external-references}
+## 外部参考文献 {#external-references}
 
-- [QEMU project (official GitLab): e907746266721](https://gitlab.com/qemu-project/qemu/-/commit/e907746266721f305d67bc0718795fedee2e824c) — "fdc: force the fifo access to be in bounds of the allocated buffer," the fix
-- [QEMU project (official GitLab): 6cc8a11c84ddc](https://gitlab.com/qemu-project/qemu/-/commit/6cc8a11c84ddc18c64fc88d54c8e9dca24ada489) — "fdc: Fix MSR.RQM flag," the follow-up spec-correctness hardening
-- [Xen Security Advisory XSA-133](https://xenbits.xen.org/xsa/advisory-133.html) — confirms the shared QEMU device-model exposure across both Xen device models
-- [Red Hat: VENOM, don't get bitten](https://access.redhat.com/blogs/product-security/posts/1976633) — technical analysis of the FIFO-index reset gap and the unconditional FDC instantiation
-- [NVD: CVE-2015-3456](https://nvd.nist.gov/vuln/detail/CVE-2015-3456) — CVE record, CVSS v2 7.7, published May 13, 2015
+- [QEMU project (official GitLab): e907746266721](https://gitlab.com/qemu-project/qemu/-/commit/e907746266721f305d67bc0718795fedee2e824c) — "fdc: force the fifo access to be in bounds of the allocated buffer"、修正
+- [QEMU project (official GitLab): 6cc8a11c84ddc](https://gitlab.com/qemu-project/qemu/-/commit/6cc8a11c84ddc18c64fc88d54c8e9dca24ada489) — "fdc: Fix MSR.RQM flag"、後続の仕様上の正しさに関する強化
+- [Xen Security Advisory XSA-133](https://xenbits.xen.org/xsa/advisory-133.html) — Xen の両方のデバイスモデルにまたがる、共有された QEMU デバイスモデルの露出を確認している
+- [Red Hat: VENOM, don't get bitten](https://access.redhat.com/blogs/product-security/posts/1976633) — FIFO インデックスのリセットの隙間と、FDC の無条件インスタンス化についての技術解析
+- [NVD: CVE-2015-3456](https://nvd.nist.gov/vuln/detail/CVE-2015-3456) — CVE レコード。CVSS v2 7.7、2015年5月13日公開

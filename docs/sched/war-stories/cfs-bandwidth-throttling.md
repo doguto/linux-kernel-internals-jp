@@ -1,66 +1,66 @@
-# The CFS Bandwidth Slice That Expired Before It Was Spent {#the-cfs-bandwidth-slice-that-expired-before-it-was-spent}
+# 使われる前に期限切れになったCFS帯域スライス {#the-cfs-bandwidth-slice-that-expired-before-it-was-spent}
 
-> A multi-threaded, non-CPU-bound application under `cpu.cfs_quota_us` could get throttled while never actually using its full quota — because each CPU's local slice of that quota expired at the end of every period whether or not it had been spent
+> `cpu.cfs_quota_us` の下で動くマルチスレッドの非CPUバウンドなアプリケーションが、クォータを実際には使い切っていないのにスロットリングされることがあった。各CPUが持つクォータのローカルスライスが、使われたかどうかにかかわらず毎周期の終わりに期限切れになっていたからである
 
-Reported by
-:   Kubernetes users (tracked publicly as [kubernetes/kubernetes#67577](https://github.com/kubernetes/kubernetes/issues/67577)); root-caused and fixed by Dave Chiluk (Indeed)
+報告者
+:   Kubernetesユーザー（[kubernetes/kubernetes#67577](https://github.com/kubernetes/kubernetes/issues/67577) として公開で追跡）。根本原因の特定と修正はDave Chiluk（Indeed）
 
-Bug present since
-:   the per-CPU slice-expiration design in CFS bandwidth control's original introduction, Linux 3.2 — masked from 2014 by an unrelated fix (`51f2176d74ac`), then re-exposed in Linux 4.18 via commit `512ac999d275` ("sched/fair: Fix bandwidth timer clock drift condition")
+バグの存在期間
+:   CFS帯域制御が最初に導入されたLinux 3.2の時点からのCPUごとのスライス期限切れ設計。2014年から無関係な修正（`51f2176d74ac`）によって覆い隠され、Linux 4.18でコミット `512ac999d275`（"sched/fair: Fix bandwidth timer clock drift condition"）によって再び露呈した
 
-Fixed in
-:   commit `de53fd7aedb1` ("sched/fair: Fix low cpu usage with high throttling by removing expiration of cpu-local slices"), mainline Linux 5.4 (November 2019)
+修正
+:   コミット `de53fd7aedb1`（"sched/fair: Fix low cpu usage with high throttling by removing expiration of cpu-local slices"）、メインラインLinux 5.4（2019年11月）
 
-Measured impact of the fix
-:   almost 30x throughput improvement on an artificial 80-CPU benchmark (10ms/100ms quota)
+修正の効果の測定値
+:   人工的な80 CPUのベンチマーク（10ms/100msのクォータ）でスループットが約30倍向上
 
-*Part of [War Stories: Scheduler Bugs](../war-stories.md).*
+*[事件簿: スケジューラのバグ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-CFS bandwidth control (`cpu.cfs_quota_us`/`cpu.cfs_period_us`) doesn't hand a cgroup's entire quota to whichever CPU asks first. To avoid a global lock on every scheduling decision, the quota is doled out in small slices to each CPU's local run queue (`cfs_rq`) as it's needed, tracked via `cfs_rq->runtime_remaining`. Each slice carried an expiration timestamp, `cfs_rq->runtime_expires`, tied to the bandwidth period it was drawn from — the idea being that an unused slice shouldn't be allowed to accumulate indefinitely across periods.
+CFS帯域制御（`cpu.cfs_quota_us`/`cpu.cfs_period_us`）は、cgroupのクォータ全体を最初に要求したCPUに渡すわけではない。スケジューリング判断のたびにグローバルなロックを取るのを避けるため、クォータは必要に応じて小さなスライスに分けて各CPUのローカルなランキュー（`cfs_rq`）に配られ、`cfs_rq->runtime_remaining` で追跡される。各スライスは、それが引き出された帯域周期に結び付いた期限のタイムスタンプ `cfs_rq->runtime_expires` を持っていた。未使用のスライスが周期をまたいで際限なく蓄積されるのを許すべきではない、という考えである。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Commit `51f2176d74ac`, merged for Linux 3.16 in 2014, added a check around this expiration logic to fix an unrelated unlocked-read race:
+2014年にLinux 3.16向けにマージされたコミット `51f2176d74ac` は、無関係なロックなし読み出しの競合を修正するため、この期限切れロジックの周りにチェックを追加した。
 
 ```c
 if (cfs_rq->runtime_expires != cfs_b->runtime_expires) {
-    /* extend local deadline, drift is bounded above by 2 ticks */
+    /* ローカルの期限を延長する。ドリフトは上限2ティックに収まる */
     cfs_rq->runtime_expires += TICK_NSEC;
 ```
 
-This conditional had the side effect of making slices effectively never expire in practice — for nearly five years, until commit `512ac999d275` ("sched/fair: Fix bandwidth timer clock drift condition") fixed *that* bug and restored real per-period expiration. Restoring correct expiration is what exposed the underlying design problem: a highly-threaded application whose individual threads each do a little work, then sleep, spreads its quota consumption thinly across many CPUs. Each CPU draws a small slice, uses part of it, and then hits the period boundary with time left on that slice — which now genuinely expired and was discarded, rather than being available to any thread that needed it moments later.
+この条件分岐には、実際にはスライスが事実上決して期限切れにならなくなるという副作用があった。それが5年近く続いたが、コミット `512ac999d275`（"sched/fair: Fix bandwidth timer clock drift condition"）が*その*バグを修正し、本当の周期ごとの期限切れを復活させた。正しい期限切れを復活させたことで、根底にある設計上の問題が露呈した。個々のスレッドが少しずつ仕事をしてはスリープする、多数のスレッドを持つアプリケーションは、クォータの消費を多数のCPUに薄く分散させる。各CPUは小さなスライスを引き出し、その一部を使い、スライスに時間を残したまま周期の境界に達する。そのスライスは今や本当に期限切れとなって破棄され、直後にそれを必要とするスレッドが使えるようにはならなかった。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-Once slices actually expired again, Kubernetes and Mesos users running multi-threaded, non-CPU-bound workloads under a CPU quota began seeing a high percentage of periods throttled — despite `cpuacct` accounting showing the container never came close to consuming its allotted quota. The workload was interactive, not CPU-bound: exactly the pattern most likely to leave unused runtime stranded on many different CPUs' local slices at once.
+スライスが再び実際に期限切れになるようになると、CPUクォータの下でマルチスレッドの非CPUバウンドなワークロードを実行しているKubernetesやMesosのユーザーは、高い割合の周期でスロットリングが起きるのを目にし始めた。`cpuacct` の計上では、コンテナが割り当てられたクォータの消費に近づいたことは一度もないと示されていたにもかかわらずである。ワークロードはCPUバウンドではなく対話的だった。これはまさに、使われなかった実行時間を多数の異なるCPUのローカルスライスに同時に置き去りにしやすいパターンである。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The 2014 fix and the 2019 fix that re-enabled real expiration were both individually correct responses to real bugs in front of their authors — an unlocked-read race, then a clock-drift condition. Neither patch was evaluating the underlying design decision that per-CPU slices should expire at all; each was narrowly scoped to the specific bug it addressed. The design flaw — that quota fragmented across many CPUs' local slices is quota that can silently evaporate at a period boundary even though the cgroup as a whole never came close to its limit — had been latent and effectively masked by the first bug for five years, and only became visible in production once the second bug fix removed the accidental workaround.
+2014年の修正と、本当の期限切れを再有効化した2019年の修正は、どちらも作者の目の前にあった実際のバグ（ロックなし読み出しの競合、そしてクロックドリフトの条件）に対する個別には正しい対応だった。どちらのパッチも、CPUごとのスライスがそもそも期限切れになるべきかという根底の設計判断を評価してはいなかった。それぞれ対処する特定のバグに狭くスコープを絞っていた。設計上の欠陥、すなわち多数のCPUのローカルスライスに断片化したクォータは、cgroup全体としては上限に近づいてもいないのに周期の境界で黙って消えうる、という欠陥は、5年間潜在し、最初のバグによって事実上覆い隠されていた。そして2つ目のバグ修正が偶然の回避策を取り除いて初めて、本番環境で見えるようになった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-Dave Chiluk's fix, commit `de53fd7aedb1`, doesn't patch the expiration logic further — it removes cpu-local slice expiration entirely. Unused quota on a CPU's local `cfs_rq` can now persist past a period boundary rather than being discarded, bounded above by `min_cfs_rq_runtime` (1ms) per CPU, so the worst-case overrun of the group's total quota in any one period is small and self-limiting. Chiluk's own reproduction — a synthetic 80-CPU test case with a 10ms/100ms quota, published as [fibtest](https://github.com/indeedeng/fibtest) — measured almost 30x higher throughput after the change, while quota restrictions remained correct over longer timeframes.
+Dave Chilukの修正であるコミット `de53fd7aedb1` は、期限切れロジックにさらにパッチを当てるのではなく、CPUローカルなスライスの期限切れを完全に取り除く。CPUのローカルな `cfs_rq` 上の未使用クォータは、破棄されずに周期の境界を越えて持ち越せるようになった。上限はCPUごとに `min_cfs_rq_runtime`（1ms）なので、ある1周期におけるグループの総クォータの最悪の超過は小さく、自己制限的である。Chiluk自身の再現（10ms/100msのクォータを持つ合成的な80 CPUのテストケースで、[fibtest](https://github.com/indeedeng/fibtest) として公開）では、変更後にスループットが約30倍向上し、より長い時間枠ではクォータ制限が正しく保たれたままだった。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A performance bug fix can silently remove a design flaw's own accidental mitigation.** The 2014 unlocked-read fix wasn't wrong, but its side effect of disabling real slice expiration had been quietly absorbing the cost of a bandwidth-fragmentation problem for five years. Fixing the clock-drift bug correctly is what made the older design flaw visible again.
+**性能バグの修正は、設計上の欠陥に対する偶然の緩和策を黙って取り除くことがある。** 2014年のロックなし読み出しの修正は間違っていなかったが、本当のスライス期限切れを無効化するという副作用が、帯域の断片化問題のコストを5年間ひそかに吸収していた。クロックドリフトのバグを正しく修正したことが、古い設計上の欠陥を再び見えるようにしたのである。
 
-**"Never consumed the quota, still got throttled" is a sign the accounting granularity is wrong, not that the limit is wrong.** The fix here wasn't to raise anyone's quota — it was to stop discarding fragments of quota that had simply landed on the wrong CPU's ledger at the wrong moment.
+**「クォータを使い切っていないのにスロットリングされた」は、上限が間違っているのではなく、計上の粒度が間違っている兆候である。** ここでの修正は誰かのクォータを引き上げることではなかった。間の悪い瞬間にたまたま間違ったCPUの台帳に載っていたクォータの断片を破棄するのをやめることだった。
 
-!!! warning "Pattern to watch for"
-    When a resource is subdivided across many independent trackers (here: one CPU's local runtime slice per cgroup, per period) for locking-scalability reasons, any expiration or reset policy applied per-subdivision needs to be evaluated against workloads that spread their usage thin across all the subdivisions at once — not just against the CPU-bound, single-hot-CPU case that's easiest to reason about and benchmark.
+!!! warning "注意すべきパターン"
+    ロックのスケーラビリティのために、リソースが多数の独立した追跡単位（ここでは、cgroupごと・周期ごとのCPUのローカル実行時間スライス）に細分化されている場合、細分化単位ごとに適用される期限切れやリセットのポリシーは、推論やベンチマークが最も容易なCPUバウンドで単一のホットCPUのケースだけでなく、すべての細分化単位に同時に使用量を薄く分散させるワークロードに対しても評価する必要がある。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Scheduler Overview](../README.md) — CFS and bandwidth control
-- [cgroup v2 CPU controller](../../cgroups/cgroup-v2.md) — how `cpu.max`/`cpu.cfs_quota_us` map onto this mechanism
+- [スケジューラの概要](../README.md) — CFSと帯域制御
+- [cgroup v2のCPUコントローラ](../../cgroups/cgroup-v2.md) — `cpu.max`/`cpu.cfs_quota_us` がこの仕組みにどう対応するか
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: de53fd7aedb1](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=de53fd7aedb100f03e5d2231cfce0e4993282425) — "sched/fair: Fix low cpu usage with high throttling by removing expiration of cpu-local slices," the fix, with Dave Chiluk's full root-cause writeup
-- [git.kernel.org: 512ac999d275](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=512ac999d275) — "sched/fair: Fix bandwidth timer clock drift condition," the fix that re-enabled real expiration and exposed the design flaw
-- [LWN: sched/fair: Fix low cpu usage with high throttling...](https://lwn.net/Articles/792268/) — Dave Chiluk's posted patch (v5), archived by LWN
-- [kubernetes/kubernetes#67577](https://github.com/kubernetes/kubernetes/issues/67577) — the public user reports that drove the root-cause investigation
+- [git.kernel.org: de53fd7aedb1](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=de53fd7aedb100f03e5d2231cfce0e4993282425) — "sched/fair: Fix low cpu usage with high throttling by removing expiration of cpu-local slices"、修正。Dave Chilukによる根本原因の詳細な解説付き
+- [git.kernel.org: 512ac999d275](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=512ac999d275) — "sched/fair: Fix bandwidth timer clock drift condition"、本当の期限切れを再有効化し設計上の欠陥を露呈させた修正
+- [LWN: sched/fair: Fix low cpu usage with high throttling...](https://lwn.net/Articles/792268/) — Dave Chilukが投稿したパッチ（v5）、LWNによるアーカイブ
+- [kubernetes/kubernetes#67577](https://github.com/kubernetes/kubernetes/issues/67577) — 根本原因の調査を後押しした公開のユーザー報告

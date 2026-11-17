@@ -1,62 +1,62 @@
-# The PI-Mutex Origin Story {#the-pi-mutex-origin-story}
+# PI-Mutex の起源 {#the-pi-mutex-origin-story}
 
-> A low-priority lock holder can be starved by a medium-priority task that has nothing to do with the lock at all, indefinitely — priority-inheritance mutexes exist because a plain mutex has no way to stop this, and it took a blunt public objection from Linus Torvalds before the kernel carried a mainline implementation anyway
+> 優先度の低いロック保持者は、そのロックとはまったく無関係な中優先度のタスクによって、無期限に飢餓状態にされうる — 優先度継承 mutex が存在するのは、通常の mutex にはこれを止める手段がないからであり、カーネルがそれでもメインラインの実装を抱えるまでには、Linus Torvalds からの率直な公開反論を経る必要があった
 
-Landed
-:   Linux 2.6.18 (September 20, 2006)
+マージ
+:   Linux 2.6.18（2006年9月20日）
 
-Authors
-:   Ingo Molnar, Thomas Gleixner (rt_mutex core and PI-futex integration); Steven Rostedt (design documentation)
+作者
+:   Ingo Molnar、Thomas Gleixner（rt_mutex コアと PI-futex の統合）。Steven Rostedt（設計ドキュメント）
 
-Originated in
-:   the out-of-tree `-rt` (PREEMPT_RT) patch series
+起源
+:   ツリー外の `-rt`（PREEMPT_RT）パッチシリーズ
 
-Not a CVE
+CVE ではない
 
-*Part of [War Stories: Locking and Synchronization Bugs](../war-stories.md).*
+*[事件簿：ロックと同期のバグ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-A plain mutex enforces exclusion but has nothing to say about scheduling. The kernel's own design documentation for rt_mutex states the failure mode precisely: with three processes A (high priority), B (medium), and C (low), where A blocks on a lock C holds, "B executes, and since B is of a higher priority than C, it preempts C, but by doing so, it is in fact preempting A which is a higher priority process. ... B is a CPU hog and will never give C a chance to release the lock." This is *unbounded* priority inversion — A's wait time is bounded only by B's behavior, which has nothing to do with the lock A actually wants, rather than by the length of C's critical section. A scheduler that always runs the highest-priority runnable task, correctly and exactly as designed, produces this outcome — the bug isn't in the scheduler.
+通常の mutex は排他を強制するが、スケジューリングについては何も規定しない。カーネル自身の rt_mutex 設計ドキュメントは、この失敗モードを正確に述べている。A（高優先度）、B（中優先度）、C（低優先度）の3つのプロセスがあり、C が保持するロックで A がブロックしたとき、"B executes, and since B is of a higher priority than C, it preempts C, but by doing so, it is in fact preempting A which is a higher priority process. ... B is a CPU hog and will never give C a chance to release the lock."（訳: B が実行され、B は C より優先度が高いので C をプリエンプトするが、そうすることで実際にはより優先度の高いプロセスである A をプリエンプトしていることになる。……B は CPU を占有し、C にロックを解放する機会を決して与えない）。これが*非有界の*優先度逆転である — A の待ち時間は C のクリティカルセクションの長さではなく、A が実際に欲しいロックとは何の関係もない B の振る舞いによってしか制限されない。常に実行可能な最高優先度のタスクを走らせるスケジューラが、正しく、設計どおりに動作してこの結果を生む — バグはスケジューラにあるのではない。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Priority-inheritance mutexes were not a novel idea in 2006 — the mechanism had existed in real-time systems literature and out-of-tree Linux `-rt` patches for years by the time Ingo Molnar and Thomas Gleixner proposed merging a mainline implementation. Linus Torvalds's opposition was blunt and public, in a December 16, 2005 LKML post: "Friends don't let friends use priority inheritance. Just don't do it. If you really need it, your system is broken anyway." Jonathan Corbet's LWN coverage in April 2006, describing the renewed merge push, noted it was "too late for 2.6.17, but, if no real opposition develops, the PI-futex code might just find its way into a subsequent kernel."
+2006年の時点で、優先度継承 mutex は新しいアイデアではなかった — Ingo Molnar と Thomas Gleixner がメインライン実装のマージを提案した頃には、この仕組みはリアルタイムシステムの文献やツリー外の Linux `-rt` パッチに何年も前から存在していた。Linus Torvalds の反対は率直かつ公開のもので、2005年12月16日の LKML 投稿でこう述べている。"Friends don't let friends use priority inheritance. Just don't do it. If you really need it, your system is broken anyway."（訳: 友人には優先度継承を使わせるな。とにかくやるな。本当に必要なら、どのみちそのシステムは壊れている）。Jonathan Corbet による2006年4月の LWN 記事は、再開したマージの動きを紹介し、"too late for 2.6.17, but, if no real opposition develops, the PI-futex code might just find its way into a subsequent kernel."（訳: 2.6.17 には間に合わないが、本格的な反対が起きなければ、PI-futex のコードはその後のカーネルに入るかもしれない）と記している。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The mechanism that eventually merged solves the inversion by making C's *effective* priority track whoever is waiting on a lock C holds, for exactly as long as C holds it: when A blocks on C's lock, C inherits A's priority immediately, so B — genuinely lower priority than the boosted C — can no longer preempt it. The moment C releases the lock, the boost is removed and C returns to its own priority. The kernel's rt_mutex design documentation describes this as a *chain*, not just a single hop: if C is itself blocked on a lock D holds, D inherits transitively, and "if process G has the highest priority in the chain, then all the tasks up the chain... must have their priorities increased to that of G" — chains can merge (multiple waiters converging on the same lock) but never diverge, since a task can only block on one lock at a time. The same chain-walk function handles the reverse direction too: released, timed-out, or signaled waiters trigger the identical logic to deboost, not a separate special case.
+最終的にマージされた仕組みは、C の*実効*優先度を、C が保持するロックを待っている者に、C がそれを保持している間だけ追従させることで逆転を解決する。A が C のロックでブロックすると、C は即座に A の優先度を継承するので、ブーストされた C より本当に優先度が低い B は、もはや C をプリエンプトできない。C がロックを解放した瞬間にブーストは取り除かれ、C は自分本来の優先度に戻る。カーネルの rt_mutex 設計ドキュメントは、これを単一のホップではなく*チェーン*として説明している。C 自身が D の保持するロックでブロックしていれば D も推移的に継承し、"if process G has the highest priority in the chain, then all the tasks up the chain... must have their priorities increased to that of G"（訳: プロセス G がチェーン内で最も高い優先度を持つなら、チェーンをさかのぼるすべてのタスクの優先度を G のそれまで引き上げなければならない）。チェーンは合流（複数の待機者が同じロックに集まる）しうるが、分岐することはない。タスクは一度に1つのロックでしかブロックできないからである。同じチェーンウォーク関数は逆方向も扱う。解放された、タイムアウトした、あるいはシグナルを受けた待機者は、別の特殊ケースではなく、同一のロジックを起動してデブーストを行う。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-This isn't a story about a mistake — it's a story about a real, well-understood problem in real-time systems that had an equally well-understood *userspace real-time* answer, contested specifically on whether the *general-purpose kernel* should carry the mechanism at all. Torvalds's objection wasn't that priority inheritance doesn't work; it was a judgment that most systems reaching for it have a design problem PI merely papers over, and that building it into the kernel invites exactly that kind of paper-over. The feature merged anyway, scoped narrowly around a concrete userspace consumer: glibc's `pthread_mutex` priority-inheritance support, which needed a real kernel-level PI primitive rather than something built entirely out of userspace polling.
+これは誤りについての話ではない — リアルタイムシステムにおける、実在しよく理解された問題についての話であり、その問題には同じくよく理解された*ユーザー空間のリアルタイム*上の答えがあった。争点は特に、*汎用カーネル*がそもそもその仕組みを抱えるべきかどうかにあった。Torvalds の反論は、優先度継承が機能しないというものではなかった。それに手を伸ばすシステムの多くは、PI が単に取り繕うだけの設計上の問題を抱えており、それをカーネルに組み込めばまさにそうした取り繕いを招く、という判断だった。この機能は結局マージされたが、具体的なユーザー空間の利用者を中心に狭く範囲を絞ったものだった。glibc の `pthread_mutex` の優先度継承サポートであり、これは完全にユーザー空間のポーリングだけで組み立てたものではなく、本物のカーネルレベルの PI プリミティブを必要としていた。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`23f78d4a03c5` ("[PATCH] pi-futex: rt mutex core", Ingo Molnar) introduced `kernel/rtmutex.c` on June 27, 2006, followed the same day by the futex-facing half, `c87e2837be82` ("[PATCH] pi-futex: futex_lock_pi/futex_unlock_pi support") — adding the `FUTEX_LOCK_PI`/`FUTEX_UNLOCK_PI` operations that give userspace's `pthread_mutex` a real kernel-backed priority-inheritance primitive, distinct from and complementary to the separately-merged "robust futex" (owner-death handling) work from earlier the same year. Both landed in the merge window that opened right after 2.6.17, shipping in **Linux 2.6.18**, released September 20, 2006 — about five months after LWN's coverage correctly guessed "a subsequent kernel."
+`23f78d4a03c5`（"[PATCH] pi-futex: rt mutex core"、Ingo Molnar）は2006年6月27日に `kernel/rtmutex.c` を導入し、同日に futex 側の半分である `c87e2837be82`（"[PATCH] pi-futex: futex_lock_pi/futex_unlock_pi support"）が続いた。これにより `FUTEX_LOCK_PI`/`FUTEX_UNLOCK_PI` 操作が追加され、ユーザー空間の `pthread_mutex` に本物のカーネル裏付けの優先度継承プリミティブが与えられた。これは、同じ年の早い時期に別途マージされた「robust futex」（所有者の死亡処理）の作業とは別物であり、それを補完するものである。どちらも 2.6.17 の直後に開いたマージウィンドウで入り、2006年9月20日リリースの **Linux 2.6.18** で出荷された — LWN の記事が「その後のカーネル」と正しく予想してから約5か月後である。
 
-The kernel's own `pi-futex.rst` documentation describes the resulting fast path plainly: "in the user-space fastpath a PI-enabled futex involves no kernel work (or any other PI complexity) at all" — ordinary atomic compare-and-swap, identical in cost to a non-PI futex when uncontended. Only the slow path (actual contention) touches the kernel's rt_mutex machinery at all.
+カーネル自身の `pi-futex.rst` ドキュメントは、結果として得られた高速パスを平易に説明している。"in the user-space fastpath a PI-enabled futex involves no kernel work (or any other PI complexity) at all"（訳: ユーザー空間の高速パスでは、PI 対応 futex はカーネルの処理（やその他の PI の複雑さ）を一切伴わない）— 通常のアトミックな compare-and-swap であり、競合がなければ非 PI の futex とコストは同一である。カーネルの rt_mutex 機構に触れるのは、低速パス（実際の競合）だけである。
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**A maintainer's blanket rejection of a mechanism and that mechanism eventually merging are not in tension — they're often the same design process working correctly.** What shipped in 2.6.18 is scoped tightly around one concrete consumer — glibc's PI-aware `pthread_mutex` support — rather than a general-purpose "fix your priority inversions" hammer, which is a large part of why the implementation stayed as narrow as it is.
+**メンテナがある仕組みを全面的に拒絶することと、その仕組みが最終的にマージされることは矛盾しない — それらはしばしば、同じ設計プロセスが正しく機能している姿である。** 2.6.18 で出荷されたものは、汎用の「優先度逆転を直すハンマー」ではなく、1つの具体的な利用者 — glibc の PI 対応 `pthread_mutex` サポート — を中心に厳密に範囲を絞ったものであり、それが実装が現在のように狭いままである大きな理由である。
 
-**Solving unbounded priority inversion changes what "priority" means at exactly one boundary: the moment a higher-priority task starts waiting on you.** The rt_mutex design's chain-walk is careful to bound how much work that boost can cost (at most two locks held at once while walking a chain) — a scheduling-correctness fix that also had to come with its own resource-bound engineering, not just an algorithmic idea.
+**非有界の優先度逆転を解決すると、「優先度」の意味が、ちょうど1つの境界で変わる。より高優先度のタスクがあなたを待ち始めた瞬間である。** rt_mutex 設計のチェーンウォークは、そのブーストにかかる作業量を慎重に制限している（チェーンをたどる間に同時に保持するロックは最大2つ）— これはスケジューリングの正しさに関する修正であると同時に、単なるアルゴリズム上のアイデアにとどまらず、独自の資源上限のエンジニアリングを伴う必要があった。
 
-!!! warning "Pattern to watch for"
-    Priority inversion doesn't require a bug anywhere — every individual component (scheduler, lock, the unrelated medium-priority task) can be behaving exactly as designed, and the system still starves a high-priority task indefinitely. If a real-time or latency-sensitive workload shares a lock with lower-priority code and any unrelated medium-priority work exists on the system, ask whether that lock needs priority inheritance — not whether anything nearby is "broken."
+!!! warning "注意すべきパターン"
+    優先度逆転は、どこにもバグがなくても起こる — 個々のコンポーネント（スケジューラ、ロック、無関係な中優先度タスク）がすべて設計どおりに動いていても、システムは高優先度タスクを無期限に飢餓状態にする。リアルタイムあるいはレイテンシに敏感なワークロードが低優先度のコードとロックを共有しており、システム上に無関係な中優先度の作業が少しでも存在するなら、近くの何かが「壊れている」かどうかではなく、そのロックに優先度継承が必要かどうかを問うこと。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Locking Overview](../README.md) — mutexes, spinlocks, and where rt_mutex fits among them
-- [The PI-Futex Fixup That Had No Answer for a Permanent Fault](pi-futex-fixup-owner-uaf.md) — a correctness bug in the machinery this page describes being built
-- [Towelroot: The Missing Check on the Requeuer's Half of the Pair](towelroot-futex-requeue.md) — a second PI-futex correctness bug, in the requeue path
+- [ロックの概要](../README.md) — mutex、spinlock、そしてその中で rt_mutex が占める位置
+- [恒久的なフォールトへの答えを持たなかった PI-Futex の修正処理](pi-futex-fixup-owner-uaf.md) — このページで構築過程を説明した機構における正しさのバグ
+- [Towelroot：ペアの requeue 側に欠けていたチェック](towelroot-futex-requeue.md) — requeue パスにおける、2つ目の PI-futex の正しさのバグ
 
-## External references {#external-references}
+## 外部参考文献 {#external-references}
 
-- [git.kernel.org: 23f78d4a03c5](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=23f78d4a03c53cbd75d87a795378ea540aa08c86) — "[PATCH] pi-futex: rt mutex core," the commit that introduced `kernel/rtmutex.c`
-- [git.kernel.org: c87e2837be82](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c87e2837be82df479a6bae9f155c43516d2feebc) — "[PATCH] pi-futex: futex_lock_pi/futex_unlock_pi support," the futex-facing integration
-- [LWN: Priority inheritance in the kernel](https://lwn.net/Articles/178253/) — Jonathan Corbet, April 3, 2006
-- [LWN: mirror of Linus Torvalds's December 2005 LKML post](https://lwn.net/Articles/178258/) — "Friends don't let friends use priority inheritance"
-- [Kernel documentation: RT-mutex implementation design](https://docs.kernel.org/locking/rt-mutex-design.html) — Steven Rostedt's design document, the source for the priority-inversion and PI-chain explanations above
-- [Kernel documentation: Lightweight PI-futexes](https://docs.kernel.org/locking/pi-futex.html) — the source for the fast-path quote above
+- [git.kernel.org: 23f78d4a03c5](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=23f78d4a03c53cbd75d87a795378ea540aa08c86) — "[PATCH] pi-futex: rt mutex core"、`kernel/rtmutex.c` を導入したコミット
+- [git.kernel.org: c87e2837be82](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c87e2837be82df479a6bae9f155c43516d2feebc) — "[PATCH] pi-futex: futex_lock_pi/futex_unlock_pi support"、futex 側の統合
+- [LWN: Priority inheritance in the kernel](https://lwn.net/Articles/178253/) — Jonathan Corbet、2006年4月3日
+- [LWN: Linus Torvalds の2005年12月の LKML 投稿のミラー](https://lwn.net/Articles/178258/) — "Friends don't let friends use priority inheritance"
+- [カーネルドキュメント: RT-mutex implementation design](https://docs.kernel.org/locking/rt-mutex-design.html) — Steven Rostedt の設計ドキュメント。上記の優先度逆転と PI チェーンの説明の出典
+- [カーネルドキュメント: Lightweight PI-futexes](https://docs.kernel.org/locking/pi-futex.html) — 上記の高速パスの引用の出典

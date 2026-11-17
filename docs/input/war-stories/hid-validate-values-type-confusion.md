@@ -1,68 +1,68 @@
-# The `hid_validate_values()` Type Confusion That a 2014 Bug Fix Introduced {#the-hidvalidatevalues-type-confusion-that-a-2014-bug-fix-introduced}
+# 2014年のバグ修正が持ち込んだ `hid_validate_values()` の型混同 {#the-hidvalidatevalues-type-confusion-that-a-2014-bug-fix-introduced}
 
-> A 2014 fix for a broken report-ID-0 lookup replaced a safe hash-table read with an unchecked list walk — introducing, as a side effect, a type confusion that sat unexploited for almost nine years purely by luck of memory layout.
+> 壊れていた report ID 0 の検索を直す2014年の修正は、安全なハッシュテーブルの読み出しを、チェックのないリストのたどりに置き換えた — その副作用として型混同を持ち込み、それはメモリレイアウトの幸運だけで、ほぼ9年間悪用されないまま残った。
 
-Landed
-:   Linux, January 2023 (CVE-2023-1073)
+マージ
+:   Linux、2023年1月（CVE-2023-1073）
 
-Driver
-:   HID core (`drivers/hid/hid-core.c`)
+ドライバ
+:   HID コア（`drivers/hid/hid-core.c`）
 
-Reporter
+報告者
 :   Pietro Borrello
 
-Introducing commit
-:   `1b15d2e5b807` (Kees Cook, 2014) — "HID: core: fix validation of report id 0"
+混入コミット
+:   `1b15d2e5b807`（Kees Cook、2014年）— "HID: core: fix validation of report id 0"
 
-Mechanism
-:   Type confusion via unchecked `list_entry()` on an empty list
+メカニズム
+:   空のリストに対するチェックなしの `list_entry()` による型混同
 
 CVE-2023-1073
 
-*Part of [War Stories: Input/HID Bugs and Regressions](../war-stories.md).*
+*[事件簿：入力/HID のバグとリグレッション](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-Every HID device's parsed report descriptor is organized by report type (input/output/feature) into a `report_enum` structure per type, each holding both a `report_id_hash[256]` array (direct lookup by report ID) and a `report_list` — a linked list of the same `struct hid_report` entries. Before 2014, `hid_validate_values()` looked up a report purely through the hash array: `report = hid->report_enum[type].report_id_hash[id];` — safe on any input, since an unpopulated slot is just a `NULL` array read.
+すべての HID デバイスのパース済みレポートディスクリプタは、レポートの種類（input/output/feature）ごとに1つずつの `report_enum` 構造体に整理されており、それぞれが `report_id_hash[256]` 配列（レポート ID による直接検索）と `report_list` — 同じ `struct hid_report` エントリの連結リスト — の両方を保持している。2014年より前、`hid_validate_values()` はハッシュ配列だけを通じてレポートを検索していた。`report = hid->report_enum[type].report_id_hash[id];` — どんな入力に対しても安全である。値の入っていないスロットは、単に `NULL` を配列から読むだけだからである。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Kees Cook's 2014 fix (`1b15d2e5b807`) addressed a real functional bug: some devices — the Logitech `lgff` gamepad family among them — numbered their single report starting at ID 1, not 0, so a driver calling `hid_validate_values()` with ID 0 to mean "give me the first report" got a `NULL` back from the hash lookup and the device stopped working. The fix special-cased ID 0: instead of the hash lookup, it walks `report_list` and takes the first entry.
+Kees Cook の2014年の修正（`1b15d2e5b807`）は、実在する機能上のバグに対処したものだった。一部のデバイス — その中には Logitech の `lgff` ゲームパッドファミリーも含まれる — は唯一のレポートの番号を 0 ではなく ID 1 から振っていたため、「最初のレポートをくれ」という意味で ID 0 を指定して `hid_validate_values()` を呼ぶドライバは、ハッシュ検索から `NULL` を受け取り、デバイスが動かなくなっていた。修正は ID 0 を特別扱いした。ハッシュ検索の代わりに `report_list` をたどり、最初のエントリを取る。
 
-To get that first entry, the new code called `list_entry()` directly on `hid->report_enum[type].report_list.next` — the standard Linux list convention where `list_entry()` uses `container_of()` to compute a pointer to the containing struct from a pointer to its embedded `list_head` field, with no runtime check that the list actually has any entries. On an **empty** list, `.next` doesn't point at a real `hid_report`; by definition of a circular empty list, it points back at the list head itself — which lives inside `report_enum`, not inside any `hid_report`. `container_of()` doesn't know that. It subtracts the `list_head` field's offset within `struct hid_report` from whatever pointer it's given, and hands back the result as if it *were* a `hid_report *` — landing at the `report_list` field itself, with the struct's later fields (as read/written by downstream code) falling inside the adjacent `report_id_hash[256]` array. A malicious HID device supplying a descriptor with zero reports of a given type triggers exactly this path.
+その最初のエントリを得るため、新しいコードは `hid->report_enum[type].report_list.next` に対して直接 `list_entry()` を呼んだ — これは Linux の標準的なリストの慣例で、`list_entry()` は `container_of()` を使って、埋め込まれた `list_head` フィールドへのポインタから、それを含む構造体へのポインタを計算する。リストに実際にエントリがあるかどうかの実行時チェックはない。**空の**リストでは、`.next` は本物の `hid_report` を指していない。循環する空リストの定義上、それはリストヘッド自身を指し返しており、そのリストヘッドはどの `hid_report` の中でもなく `report_enum` の中にある。`container_of()` はそれを知らない。与えられたポインタから `struct hid_report` 内の `list_head` フィールドのオフセットを引き、その結果を、あたかもそれが `hid_report *` *である*かのように返す — その位置は `report_list` フィールド自体に当たり、構造体のそれより後ろのフィールド（下流のコードが読み書きするもの）は、隣接する `report_id_hash[256]` 配列の中に収まる。ある種類のレポートを1つも持たないディスクリプタを渡す悪意のある HID デバイスは、まさにこのパスを起動する。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-Code downstream of the type-confused pointer then reads and writes fields of what it believes is a `struct hid_report` — but is actually reading and writing bytes that belong to `report_id_hash` and whatever memory sits around it in the real `report_enum` struct. This is type confusion, not a simple out-of-bounds access: the pointer is "valid" in the sense that it points at real, allocated memory, just memory of a completely different type and layout than the code operating on it assumes. NVD rates it CVSS 3.1 6.6. Borrello's own disclosure concluded that, in the specific instances found, the bug was **not actually exploitable** — the fields the type-confused pointer ends up reading/writing happen to land on parts of `report_id_hash` that are zero-initialized and stay that way, so the corruption has no observable effect under the layout current kernels happen to produce. The disclosure still recommended fixing it defensively, since that safety margin depends on struct layout details (padding, field ordering) that aren't guaranteed to hold — a future rearrangement, or structure-layout randomization, could turn today's inert type confusion into a real primitive.
+型混同したポインタの下流にあるコードは、`struct hid_report` だと信じているもののフィールドを読み書きする — しかし実際には、`report_id_hash` と、本物の `report_enum` 構造体の中でその周囲にあるメモリに属するバイトを読み書きしている。これは単純な範囲外アクセスではなく型混同である。ポインタは、実在する割り当て済みのメモリを指しているという意味では「有効」だが、それを操作するコードが想定しているのとはまったく異なる型とレイアウトのメモリを指している。NVD はこれを CVSS 3.1 6.6 と評価している。Borrello 自身の開示は、見つかった具体的な事例において、このバグは**実際には悪用できない**と結論づけた — 型混同したポインタが最終的に読み書きするフィールドは、たまたま `report_id_hash` のうちゼロ初期化されてそのままになっている部分に当たるので、現在のカーネルがたまたま生成するレイアウトのもとでは、破損は観測可能な影響を持たない。それでも開示は防御的に修正することを推奨した。その安全マージンは、保証されていない構造体レイアウトの詳細（パディング、フィールドの順序）に依存しているからである — 将来の並べ替えや構造体レイアウトのランダム化によって、今日の無害な型混同が本物のプリミティブに変わりうる。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The bug's history is the sharpest part of this incident, and it runs the opposite direction from what a first read of the code might suggest. The 2014 commit didn't leave a pre-existing gap unaddressed — it *introduced* the vulnerable code path. Before 2014, `hid_validate_values()` never called `list_entry()` at all; every lookup went through the hash array, which is safe by construction (an unpopulated slot is just `NULL`). Fixing the report-id-0 problem required a different lookup strategy for that one case, and the strategy chosen — walk the list, take the first entry — introduced a list-walking primitive with no precedent elsewhere in the function to establish the "always check emptiness first" habit. The `Fixes: 1b15d2e5b807` tag on Borrello's 2023 patch makes the causal chain explicit: this is a fix *for* the 2014 commit, not an extension of it to a case it missed.
+このバグの経緯こそがこの事件の最も鋭い部分であり、その向きは、コードを最初に読んだときに受ける印象とは逆である。2014年のコミットは、既存の穴を放置したのではない — 脆弱なコードパスを*持ち込んだ*のである。2014年より前、`hid_validate_values()` は `list_entry()` を一度も呼んでいなかった。すべての検索はハッシュ配列を通っており、それは構造上安全だった（値の入っていないスロットは単に `NULL` である）。report-id-0 の問題を直すには、その1つのケースに対して別の検索戦略が必要で、選ばれた戦略 — リストをたどり、最初のエントリを取る — は、この関数の中に「常に先に空かどうかをチェックする」習慣を根付かせる前例がまったくない、リストをたどるプリミティブを持ち込んだ。Borrello の2023年のパッチに付いた `Fixes: 1b15d2e5b807` タグは、この因果関係を明示している。これは2014年のコミットが見逃したケースへの拡張ではなく、2014年のコミット*に対する*修正なのである。
 
-Pietro Borrello's disclosure also flagged a second instance of the same root pattern in `hid-bigbenff.c`'s probe function, confirming this wasn't a one-off logic slip specific to `hid_validate_values()`'s call site, but a pattern that had been copied or independently reproduced elsewhere in the HID tree.
+Pietro Borrello の開示は、`hid-bigbenff.c` の probe 関数にある同じ根本パターンの2つ目の事例も指摘しており、これが `hid_validate_values()` の呼び出し箇所に固有の一回限りのロジックの誤りではなく、HID ツリーの他の場所でもコピーされたか、独立に再現されたパターンであることを裏付けている。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-The fix replaces the bare `list_entry()` call with `list_first_entry_or_null()`, a standard kernel helper that performs the same `container_of()` computation but first checks whether the list is empty and returns `NULL` if so — pushing the emptiness check into the primitive itself rather than relying on every call site to remember to check before calling `list_entry()`.
+修正は、むき出しの `list_entry()` 呼び出しを `list_first_entry_or_null()` に置き換える。これは標準のカーネルヘルパーで、同じ `container_of()` の計算を行うが、先にリストが空かどうかをチェックし、空なら `NULL` を返す — 空のチェックを、すべての呼び出し箇所が `list_entry()` を呼ぶ前に忘れずにチェックすることに頼るのではなく、プリミティブ自体に押し込んだのである。
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**A bug fix that trades a safe access pattern for an unsafe one, in service of fixing an unrelated functional problem, can introduce a new vulnerability class as a side effect — and that side effect can go unnoticed for the better part of a decade if it happens to land somewhere memory layout keeps it inert.** The 2014 commit's authors were solving a real, narrow problem (report-id-0 lookups for a specific device family) and had no reason to think about list emptiness, because the code path they were replacing had never needed to. The empty-list case wasn't a known gap someone chose not to close; it was a new failure mode nobody was looking for, created by the fix itself.
+**無関係な機能上の問題を直すために、安全なアクセスパターンを安全でないものと引き換えにするバグ修正は、副作用として新しい脆弱性クラスを持ち込みうる — そしてその副作用は、メモリレイアウトがそれを無害に保つ場所にたまたま当たれば、10年近く気付かれないことがある。** 2014年のコミットの作者たちは、実在する狭い問題（特定のデバイスファミリーに対する report-id-0 の検索）を解決しようとしていて、リストが空である場合について考える理由はなかった。置き換えようとしていたコードパスでは、それが一度も必要なかったからである。空リストのケースは、誰かが塞がないことを選んだ既知の穴ではなかった。それは修正そのものが生み出した、誰も探していなかった新しい失敗モードだった。
 
-**`list_entry()`/`container_of()` will silently produce a pointer to the wrong type of object when called on an empty list, because the macro has no way to know the list is empty — it just does pointer arithmetic.** `list_first_entry_or_null()` exists specifically so callers don't have to remember to check emptiness themselves; a bare `list_entry()` call on a list whose emptiness isn't already guaranteed by some invariant elsewhere is worth treating as suspect on sight.
+**`list_entry()`/`container_of()` は、空のリストに対して呼ばれると、黙って誤った型のオブジェクトへのポインタを生成する。マクロにはリストが空であることを知る手段がなく、単にポインタ演算を行うだけだからである。** `list_first_entry_or_null()` は、呼び出し側が自分で空チェックを忘れずに行わなくて済むように存在する。どこか別の場所の不変条件によって空でないことがすでに保証されていないリストに対する、むき出しの `list_entry()` 呼び出しは、見た瞬間に疑ってかかる価値がある。
 
-!!! warning "Pattern to watch for"
-    `list_entry()` (or a hand-rolled `container_of()` on a list's `.next` pointer) called without a preceding `list_empty()` check or an established invariant guaranteeing non-emptiness — especially when the list's population is driven by attacker-controlled input, like a device's own descriptor, that can legitimately produce zero entries.
+!!! warning "注意すべきパターン"
+    先行する `list_empty()` チェックも、空でないことを保証する確立した不変条件もないまま呼ばれる `list_entry()`（あるいはリストの `.next` ポインタに対する手書きの `container_of()`）— 特に、リストの中身が、デバイス自身のディスクリプタのように、正当にエントリ数ゼロを生成しうる攻撃者制御の入力によって決まる場合。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [The HID Subsystem](../hid.md) — report descriptors, `struct hid_report`, and where `hid_validate_values()` sits in the report-handling path
-- [The Uninitialized HID Report Buffer Kernel Memory Leak](uninitialized-report-buffer-leak.md) — a different HID core bug, from a non-zeroing allocator rather than a list-emptiness gap
-- [14 Force-Feedback Drivers, Missing List-Emptiness Check](../war-stories.md#case-3-14-force-feedback-drivers-missing-a-list-emptiness-check-cve-2019-19532) — the same list-emptiness-unchecked pattern, about 3.3 years *earlier*, at the per-driver probe layer instead of HID core
+- [HID サブシステム](../hid.md) — レポートディスクリプタ、`struct hid_report`、そしてレポート処理パスの中での `hid_validate_values()` の位置
+- [未初期化の HID レポートバッファによるカーネルメモリリーク](uninitialized-report-buffer-leak.md) — リストの空チェックの穴ではなく、ゼロ初期化しないアロケータに起因する、別の HID コアのバグ
+- [14個のフォースフィードバックドライバに欠けていたリストの空チェック](../war-stories.md#case-3-14-force-feedback-drivers-missing-a-list-emptiness-check-cve-2019-19532) — 約3.3年*前*の、HID コアではなくドライバごとの probe 層における、同じ「リストの空チェックなし」パターン
 
-## External references {#external-references}
+## 外部参考文献 {#external-references}
 
 - [NVD: CVE-2023-1073](https://nvd.nist.gov/vuln/detail/CVE-2023-1073) — CVSS 3.1 6.6
-- [oss-security: disclosure thread](https://www.openwall.com/lists/oss-security/2023/01/17/3) — Pietro Borrello's original report, January 17, 2023
-- [git.kernel.org: b12fece4c648](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b12fece4c64857e5fab4290bf01b2e0317a88456) — the fix: `list_entry()` → `list_first_entry_or_null()`
-- [git.kernel.org: 1b15d2e5b807](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1b15d2e5b8077670b1e6a33250a0d9577efff4a5) — the 2014 commit that fixed a report-id-0 lookup bug and, as a side effect, introduced the unchecked `list_entry()` call this incident is about
+- [oss-security: disclosure thread](https://www.openwall.com/lists/oss-security/2023/01/17/3) — Pietro Borrello の元の報告、2023年1月17日
+- [git.kernel.org: b12fece4c648](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b12fece4c64857e5fab4290bf01b2e0317a88456) — 修正: `list_entry()` → `list_first_entry_or_null()`
+- [git.kernel.org: 1b15d2e5b807](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1b15d2e5b8077670b1e6a33250a0d9577efff4a5) — report-id-0 の検索バグを直し、その副作用として、この事件の主題であるチェックなしの `list_entry()` 呼び出しを持ち込んだ2014年のコミット

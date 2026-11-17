@@ -1,67 +1,67 @@
-# The pty_write() Lock That Was Fixed, Un-Fixed, and Fixed Again {#the-pty_write-lock-that-was-fixed-un-fixed-and-fixed-again}
+# 修正され、修正が取り消され、再び修正された pty_write() のロック {#the-pty_write-lock-that-was-fixed-un-fixed-and-fixed-again}
 
-> A 2018 fix for a data race added a lock. A 2020 fix for a lockdep-detected deadlock removed part of it — silently reintroducing the original race in a new shape. A 2022 CVE report finally caught the reintroduced bug, and the real fix took both properties at once instead of trading one for the other.
+> データ競合に対する2018年の修正はロックを追加した。lockdep が検出したデッドロックに対する2020年の修正はその一部を取り除いた — そして元の競合を新しい形で黙って再導入した。2022年の CVE 報告がついに再導入されたバグを捕捉し、本当の修正は、一方を他方と引き換えにするのではなく、両方の性質を同時に満たした。
 
-Landed (final fix)
-:   Linux, July 2022 (CVE-2022-1462)
+マージ（最終修正）
+:   Linux、2022年7月（CVE-2022-1462）
 
-Driver
-:   PTY core (`drivers/tty/pty.c`, `drivers/tty/tty_buffer.c`)
+ドライバ
+:   PTY コア（`drivers/tty/pty.c`、`drivers/tty/tty_buffer.c`）
 
-Reporter (2022)
-:   "一只狗" via oss-security
+報告者（2022年）
+:   oss-security 経由の "一只狗"
 
-Mechanism
-:   Unsynchronized tty flip-buffer commit, three revisions across four years
+メカニズム
+:   同期されていない tty フリップバッファのコミット。4年間にわたる3度の改訂
 
 CVE-2022-1462
 
-*Part of [War Stories: TTY/Serial Bugs and Regressions](../war-stories.md).*
+*[事件簿：TTY/シリアルのバグとリグレッション](../war-stories.md)の一部。*
 
-## Act 1 (2018): the original race {#act-1-2018-the-original-race}
+## 第1幕（2018年）：元の競合 {#act-1-2018-the-original-race}
 
-`pty_write()` inserted incoming bytes into the receiving side's tty flip buffer via `tty_insert_flip_string_fixed_flag()` and then called `tty_flip_buffer_push()` to commit them, with no lock around either call. Two threads could both reach `pty_write()` for the same pty concurrently through entirely different call chains — the KASAN report that motivated the fix shows one thread arriving via `n_hdlc_send_frames()` → `pty_write()` (triggered by a wakeup from an `n_tty_ioctl_helper()`/`__start_tty()` call) while another arrives via `tty_send_xchar()` → `pty_write()` (triggered by a separate `n_tty_ioctl_helper()` call on the other CPU) — and both could be mutating the flip buffer's tail and commit state at once, corrupting it: a slab out-of-bounds write.
+`pty_write()` は、受信側の tty フリップバッファに `tty_insert_flip_string_fixed_flag()` で到着したバイトを挿入し、その後 `tty_flip_buffer_push()` を呼んでそれをコミットしていたが、どちらの呼び出しもロックで囲まれていなかった。2つのスレッドが、まったく異なる呼び出しチェーンを通って、同じ pty の `pty_write()` に同時に到達しうる — 修正の動機となった KASAN の報告は、一方のスレッドが `n_hdlc_send_frames()` → `pty_write()` を経て（`n_tty_ioctl_helper()`/`__start_tty()` 呼び出しからのウェイクアップによって起動されて）到着し、もう一方が `tty_send_xchar()` → `pty_write()` を経て（もう一方の CPU 上の別の `n_tty_ioctl_helper()` 呼び出しによって起動されて）到着する様子を示している — そして両者がフリップバッファの末尾とコミット状態を同時に変更し、それを破壊しうる。slab の範囲外書き込みである。
 
-Commit `b6da31b2c07c46f2dcad1d86caa835227a16d9ff` ("tty: Fix data race in tty_insert_flip_string_fixed_flag", DaeRyong Jeong, April 2018) fixes this the straightforward way: wrap both the insert and the subsequent `tty_flip_buffer_push()` in `to->port->lock`.
+コミット `b6da31b2c07c46f2dcad1d86caa835227a16d9ff`（"tty: Fix data race in tty_insert_flip_string_fixed_flag"、DaeRyong Jeong、2018年4月）は、これを素直な方法で修正する。挿入とその後の `tty_flip_buffer_push()` の両方を `to->port->lock` で囲むのである。
 
-## Act 2 (2020): the fix creates a deadlock {#act-2-2020-the-fix-creates-a-deadlock}
+## 第2幕（2020年）：修正がデッドロックを生む {#act-2-2020-the-fix-creates-a-deadlock}
 
-Holding `port->lock` across `tty_flip_buffer_push()` turned out to have a cost the 2018 fix didn't anticipate: `tty_flip_buffer_push()` ends up taking the workqueue `pool->lock` directly (via `queue_work_on()`/`__queue_work()`), and that edge closes a cycle that also runs through `console_owner` and the 8250 console's own `port->lock` elsewhere in the dependency graph — `console_unlock()` takes `console_owner` while calling into `serial8250_console_write()`, which takes a UART's `port->lock`, while separately a task holding the workqueue's `pool->lock` (dumping workqueue state via `printk()`) can call into `console_unlock()` and block on `console_owner`. Lockdep flagged the resulting circular lock-ordering dependency across those three locks — a real deadlock risk under the right interleaving, not a lock `tty_flip_buffer_push()` itself ever directly acquires.
+`tty_flip_buffer_push()` の間 `port->lock` を保持することには、2018年の修正が予期していなかったコストがあることが判明した。`tty_flip_buffer_push()` は最終的に（`queue_work_on()`/`__queue_work()` を通じて）workqueue の `pool->lock` を直接取得し、その依存辺が、依存グラフの別の場所で `console_owner` と 8250 コンソール自身の `port->lock` を通るサイクルを閉じてしまう — `console_unlock()` は `console_owner` を取得したまま `serial8250_console_write()` を呼び、それが UART の `port->lock` を取得する。一方で別途、workqueue の `pool->lock` を保持しているタスク（`printk()` で workqueue の状態をダンプしている）が `console_unlock()` を呼んで `console_owner` でブロックしうる。lockdep は、これら3つのロックにまたがる結果としての循環的なロック順序の依存関係を指摘した — 適切なインターリーブのもとでは実際のデッドロックの危険であり、`tty_flip_buffer_push()` 自身が直接取得するロックの問題ではなかった。
 
-Commit `71a174b39f10b4b93223d374722aa894b5d8a82e` ("pty: do tty_flip_buffer_push without port->lock in pty_write", Artem Savkov, September 2020) resolves the lockdep cycle by moving `tty_flip_buffer_push()` back **outside** `port->lock` — but the insert itself stays locked. This looks like a narrower, more surgical fix than reverting Act 1 entirely. It isn't: `tty_flip_buffer_push()` *writes* the buffer's `commit` field (via `smp_store_release()`, so that the write is visible to a paired acquire-load) to mark how much data is ready to hand to the line discipline, and once that write moves outside the lock, a concurrent insert can leave `commit` in an inconsistent state relative to what a later, independent reader observes — the 2018 race, reborn in the commit-tracking field instead of the raw insert. That later read happens in `flush_to_ldisc()`, the workqueue worker described in Act 3 below, which pairs its own `smp_load_acquire(&head->commit)` against this now-unlocked write.
+コミット `71a174b39f10b4b93223d374722aa894b5d8a82e`（"pty: do tty_flip_buffer_push without port->lock in pty_write"、Artem Savkov、2020年9月）は、`tty_flip_buffer_push()` を `port->lock` の**外**に戻すことで lockdep のサイクルを解消する — ただし挿入自体はロックされたままである。これは第1幕を丸ごとリバートするより狭く、より外科的な修正に見える。だがそうではない。`tty_flip_buffer_push()` は、ライン規約に渡す準備ができたデータ量を示すために、バッファの `commit` フィールドに（対になる acquire ロードから書き込みが見えるように `smp_store_release()` で）*書き込む*。その書き込みがロックの外に移ると、並行する挿入によって、`commit` が、後で独立に読み出す側が観測するものと比べて不整合な状態に置かれうる — 2018年の競合が、生の挿入ではなくコミットを追跡するフィールドで生まれ変わったのである。その後の読み出しは、下の第3幕で説明する workqueue のワーカー `flush_to_ldisc()` で行われ、それは自身の `smp_load_acquire(&head->commit)` を、今やロックされていないこの書き込みと対にしている。
 
-## Act 3 (2022): the reborn race gets a CVE {#act-3-2022-the-reborn-race-gets-a-cve}
+## 第3幕（2022年）：生まれ変わった競合に CVE が付く {#act-3-2022-the-reborn-race-gets-a-cve}
 
-A researcher reported on oss-security that `flush_to_ldisc()` could compute a **negative** byte count — `smp_load_acquire(&head->commit) - head->read` going negative when the racing insert and read observed inconsistent state — leading to an out-of-bounds read and disclosure of kernel slab memory — Jiri Slaby's fix commit describes the same inconsistent-tail race more broadly as something that "can lead to out of bounds writes and other issues" too. Per NVD's own CVE description, the race was reproduced by racing `pty_write()` against `ioctl(TIOCSTI)` and `ioctl(TCXONC)` on the other end of the pair — both of which also insert characters into the same tty buffer outside of `pty_write()`'s call path. This is CVE-2022-1462, rated CVSS 3.1 6.3 (MEDIUM).
+ある研究者が oss-security で、`flush_to_ldisc()` が**負の**バイト数を計算しうることを報告した — 競合する挿入と読み出しが不整合な状態を観測すると `smp_load_acquire(&head->commit) - head->read` が負になり、範囲外読み出しとカーネルの slab メモリの漏洩につながる — Jiri Slaby の修正コミットは、同じ不整合な末尾の競合を、より広く "can lead to out of bounds writes and other issues"（訳: 範囲外書き込みやその他の問題にもつながりうる）ものとして説明している。NVD 自身の CVE の説明によれば、この競合は、ペアの反対側で `pty_write()` と `ioctl(TIOCSTI)` および `ioctl(TCXONC)` を競合させることで再現された — どちらも `pty_write()` の呼び出しパスの外で、同じ tty バッファに文字を挿入する。これが CVE-2022-1462 であり、CVSS 3.1 6.3（MEDIUM）と評価されている。
 
-Commit `a501ab75e7624d133a5a3c7ec010687c8b961d23` ("tty: use new tty_insert_flip_string_and_push_buffer() in pty_write()", Jiri Slaby, July 2022) carries `Fixes: 71a174b39f10` in its own commit message — an explicit acknowledgment that the 2020 fix is what broke this. The real resolution introduces a new helper, `tty_insert_flip_string_and_push_buffer()`, that does the insert **and** the buffer commit under `port->lock` together — closing the 2018/2022 race — but defers the subsequent `queue_work()` call to *outside* the lock, which is what actually avoids the 2020 deadlock. The two properties the 2018 and 2020 fixes each got half of — no data race, no lock-ordering cycle — turn out to both be achievable, just not by choosing which operation happens under the lock as an either/or.
+コミット `a501ab75e7624d133a5a3c7ec010687c8b961d23`（"tty: use new tty_insert_flip_string_and_push_buffer() in pty_write()"、Jiri Slaby、2022年7月）は、自身のコミットメッセージに `Fixes: 71a174b39f10` を含んでいる — これを壊したのは2020年の修正だという明示的な認定である。本当の解決は新しいヘルパー `tty_insert_flip_string_and_push_buffer()` を導入する。これは挿入**と**バッファのコミットを一緒に `port->lock` の下で行い — 2018年/2022年の競合を閉じる — その後の `queue_work()` 呼び出しをロックの*外*に遅らせる。これこそが実際に2020年のデッドロックを避けるものである。2018年と2020年の修正がそれぞれ半分ずつしか得られなかった2つの性質 — データ競合がないこと、ロック順序のサイクルがないこと — は、どちらの操作をロックの下で行うかを二者択一で選ぶのでなければ、両方とも達成できることが判明したのである。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-Each of the first two fixes was locally correct for the specific problem it targeted. The 2018 fix genuinely closed a data race. The 2020 fix genuinely closed a lockdep-detected deadlock. Neither fix's author was wrong about the bug they were looking at — the 2020 fix's author was solving a real, verified lock-ordering problem, and the tool that caught it (lockdep) doesn't know or care about data-race safety, only about lock acquisition order. Moving the buffer commit outside the lock was a correct, minimal-looking way to break the specific cycle lockdep reported. What it didn't do was re-examine whether the *unlocked* commit read was still safe once the insert stayed locked but the read didn't — a property the 2018 fix had established as an invariant across both operations, and which the 2020 fix broke without anyone re-verifying it.
+最初の2つの修正は、それぞれが対象とした特定の問題に対してはローカルに正しかった。2018年の修正は本当にデータ競合を閉じた。2020年の修正は本当に lockdep が検出したデッドロックを閉じた。どちらの修正の作者も、自分が見ているバグについて間違っていたわけではない — 2020年の修正の作者は、実在し検証済みのロック順序の問題を解決しようとしており、それを捕捉したツール（lockdep）はデータ競合の安全性については知らないし気にもかけない。ロックの獲得順序だけを見る。バッファのコミットをロックの外に移すことは、lockdep が報告した特定のサイクルを断ち切るための、正しく最小限に見える方法だった。それがしなかったのは、挿入はロックされたままで読み出しがそうでなくなったときに、*ロックされていない*コミットの読み出しがなお安全かどうかを再検討することだった — それは2018年の修正が両操作にまたがる不変条件として確立していた性質であり、2020年の修正は誰もそれを再検証することなく、その性質を壊したのである。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-See Act 3 above: `tty_insert_flip_string_and_push_buffer()` performs the insert and the commit atomically under `port->lock`, and only releases the lock before the (lock-independent) work-queueing step — achieving both the 2018 fix's data-race safety and the 2020 fix's freedom from the lockdep cycle in the same commit.
+上の第3幕を参照のこと。`tty_insert_flip_string_and_push_buffer()` は挿入とコミットを `port->lock` の下でアトミックに行い、（ロックに依存しない）work をキューに入れるステップの前でのみロックを解放する — 2018年の修正のデータ競合安全性と、2020年の修正の lockdep サイクルからの解放を、同じコミットで両立させている。
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**A fix that resolves a *detected* problem (a lockdep splat, a specific crash) can silently undo an *undetected* invariant the previous fix relied on, if that invariant was never itself written down or tested for.** The 2018 fix established "insert and commit happen atomically together" as an implicit invariant. Nothing enforced or documented that invariant as a first-class property — so the 2020 fix, focused entirely on satisfying lockdep, had no signal that splitting insert and commit across the lock boundary would violate it.
+***検出された*問題（lockdep の警告、特定のクラッシュ）を解決する修正は、前の修正が依存していた*検出されていない*不変条件を、それ自体が書き留められたりテストされたりしていなければ、黙って取り消しうる。** 2018年の修正は「挿入とコミットはアトミックに一緒に行われる」を暗黙の不変条件として確立した。その不変条件を第一級の性質として強制したり文書化したりするものは何もなかった — そのため、lockdep を満足させることだけに集中していた2020年の修正には、挿入とコミットをロック境界をまたいで分割するとそれが破られる、というシグナルが何もなかった。
 
-**Two correctness properties that look like they trade off against each other (no data race vs. no deadlock) may both be achievable — the apparent tradeoff can be an artifact of *how* the fix is structured, not a fundamental conflict.** The final fix didn't choose between locking more or locking less; it changed *what* stays under the lock together (insert + commit, but not the subsequent work-queue call) to get both properties at once.
+**互いにトレードオフの関係にあるように見える2つの正しさの性質（データ競合がないこと対デッドロックがないこと）は、両方とも達成できる場合がある — 見かけのトレードオフは、根本的な対立ではなく、修正を*どう*構成したかの産物でありうる。** 最終的な修正は、ロックを増やすか減らすかを選んだのではない。*何を*一緒にロックの下に置くか（挿入 + コミット、ただしその後の workqueue 呼び出しは含めない）を変えることで、両方の性質を同時に得たのである。
 
-!!! warning "Pattern to watch for"
-    A fix for a deadlock/lock-ordering problem that responds by moving one part of a previously-atomic multi-step operation outside the lock, without re-verifying that the steps still need to happen atomically with each other for a *different* reason (here: data-race safety) than the one that motivated putting them under the lock in the first place.
+!!! warning "注意すべきパターン"
+    デッドロック/ロック順序の問題に対する修正が、以前はアトミックだった複数ステップの操作の一部をロックの外に移すことで対応しており、そもそもそれらをロックの下に置いた動機とは*別の*理由（ここではデータ競合の安全性）で、それらのステップがなお互いにアトミックに行われる必要があるかどうかを再検証していない場合。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Serial Core and UART Drivers](../serial.md) / [Line Disciplines, termios, and Pseudo-Terminals](../line-disciplines.md) — the pty master/slave model and tty buffer mechanics this incident lives inside
-- [The n_tty Echo Race](n-tty-echo-race.md) — a different tty-buffer locking bug, in N_TTY rather than the pty layer, with a comparably long tail (nine years from fix to CISA KEV listing)
+- [シリアルコアと UART ドライバ](../serial.md) / [ライン規約、termios、擬似端末](../line-disciplines.md) — この事件が起きている pty の master/slave モデルと tty バッファの仕組み
+- [n_tty のエコー競合](n-tty-echo-race.md) — pty 層ではなく N_TTY における別の tty バッファのロックのバグ。同じくらい長い尾を引いた（修正から CISA KEV 掲載まで9年）
 
-## External references {#external-references}
+## 外部参考文献 {#external-references}
 
 - [NVD: CVE-2022-1462](https://nvd.nist.gov/vuln/detail/CVE-2022-1462) — CVSS 3.1 6.3 MEDIUM
-- [oss-security: original report](https://seclists.org/oss-sec/2022/q2/155)
-- [git.kernel.org: b6da31b2c07c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b6da31b2c07c46f2dcad1d86caa835227a16d9ff) — Act 1 (2018): lock the insert and commit
-- [git.kernel.org: 71a174b39f10](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=71a174b39f10b4b93223d374722aa894b5d8a82e) — Act 2 (2020): move the commit outside the lock to fix a lockdep cycle
-- [git.kernel.org: a501ab75e762](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a501ab75e7624d133a5a3c7ec010687c8b961d23) — Act 3 (2022): the real fix, `Fixes: 71a174b39f10` in its own commit message
+- [oss-security: 元の報告](https://seclists.org/oss-sec/2022/q2/155)
+- [git.kernel.org: b6da31b2c07c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b6da31b2c07c46f2dcad1d86caa835227a16d9ff) — 第1幕（2018年）：挿入とコミットをロックする
+- [git.kernel.org: 71a174b39f10](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=71a174b39f10b4b93223d374722aa894b5d8a82e) — 第2幕（2020年）：lockdep のサイクルを直すため、コミットをロックの外に移す
+- [git.kernel.org: a501ab75e762](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a501ab75e7624d133a5a3c7ec010687c8b961d23) — 第3幕（2022年）：本当の修正。自身のコミットメッセージに `Fixes: 71a174b39f10` を含む

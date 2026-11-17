@@ -1,35 +1,35 @@
-# The Dentry-Cache Walk Livelock {#the-dentry-cache-walk-livelock}
+# dentry キャッシュのウォークのライブロック {#the-dentry-cache-walk-livelock}
 
-> CVE-2014-8559 — `d_walk()`'s rename-detection restart couldn't tell "a rename happened" from "a sibling got killed," so a concurrent dentry prune could make the walker deadlock against itself and hang every rename on the machine
+> CVE-2014-8559 — `d_walk()` のリネーム検出による再スタートは、「リネームが起きた」と「兄弟が kill された」を区別できなかった。そのため、並行する dentry の刈り込みによって、ウォーカーが自分自身とデッドロックし、マシン上のすべてのリネームをハングさせることがありえた
 
-Disclosed
-:   November 10, 2014 (NVD); fix authored October 26, 2014
+公開日
+:   2014年11月10日（NVD）。修正の作成は2014年10月26日
 
-Reported by
-:   Prasad Pandit, Red Hat (RHBZ #1159313, October 31, 2014) — though the identical bug was independently diagnosed by Jaegeuk Kim eight months earlier
+報告者
+:   Prasad Pandit、Red Hat（RHBZ #1159313、2014年10月31日）— ただし同一のバグは、その8か月前に Jaegeuk Kim が独立に診断していた
 
 CVSS
-:   5.5 MEDIUM (`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H`)
+:   5.5 MEDIUM（`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H`）
 
-Bug present since
-:   ~v3.12 (November 2013), when `d_walk()` unified the dentry-tree traversal code
+バグの混入時期
+:   v3.12 頃（2013年11月）、`d_walk()` が dentry ツリーをたどるコードを統合したとき
 
-Fixed in
-:   commit `ca5358ef75fc`, authored October 26, 2014; reached the 3.18.y stable branch about seven weeks later (3.18.1, December 2014), older LTS branches (3.10.y, 3.14.y) not until mid-2015, and mainline proper in Linux 3.19 (February 2015)
+修正
+:   commit `ca5358ef75fc`、2014年10月26日作成。約7週間後に 3.18.y の stable ブランチ（3.18.1、2014年12月）に入り、古い LTS ブランチ（3.10.y、3.14.y）には2015年半ばまで入らず、メインラインそのものには Linux 3.19（2015年2月）で入った
 
-Exploit tool
-:   no — no public exploit tool exists; this is a concurrency bug reachable through ordinary filesystem load, not a crafted-input attack
+エクスプロイトツール
+:   なし — 公開のエクスプロイトツールは存在しない。これは細工した入力による攻撃ではなく、通常のファイルシステム負荷で到達可能な並行性のバグである
 
-Actively exploited
-:   no confirmed cases (not on CISA KEV) — local denial of service only
+実際の悪用
+:   確認された事例はない（CISA KEV には掲載されていない）— ローカルなサービス拒否のみ
 
-*Part of [War Stories: VFS Bugs and Regressions](../war-stories.md).*
+*[事件簿：VFS のバグとリグレッション](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-`d_walk()` (`fs/dcache.c`) is the generic, depth-first tree walker used for operations that need to visit every dentry under a directory — cache shrinking, unmount, `d_invalidate()`, and more. It holds at most one dentry's `d_lock` at a time, dropping the child's before taking the parent's, which makes global consistency the walker's real problem: nothing stops another thread from renaming part of the tree mid-walk. That's `rename_lock`'s job — a seqlock. The walker samples `rename_lock`'s sequence counter before it starts; if the counter changed by the time it finishes, `need_seqretry()` reports the walk as unsafe and it restarts from the top, this time actually holding `rename_lock`'s write side so it's guaranteed to finish.
+`d_walk()`（`fs/dcache.c`）は、ディレクトリ配下のすべての dentry を訪れる必要がある操作 — キャッシュの縮小、アンマウント、`d_invalidate()` など — に使われる、汎用の深さ優先のツリーウォーカーである。これは一度に最大1つの dentry の `d_lock` しか保持せず、親のロックを取る前に子のロックを手放す。そのため、ウォーカーにとっての本当の問題はグローバルな整合性になる。ウォークの途中で別のスレッドがツリーの一部をリネームするのを止めるものは何もない。それは seqlock である `rename_lock` の役目である。ウォーカーは開始前に `rename_lock` のシーケンスカウンタを取得する。終了時までにカウンタが変化していれば、`need_seqretry()` はウォークが安全でないと報告し、ウォークは先頭から再スタートする。今度は実際に `rename_lock` の書き込み側を保持するので、完了が保証される。
 
-Ascending back to a parent after finishing a subtree re-validated with a three-way condition:
+サブツリーを終えて親に戻るときには、3つの条件による再検証が行われていた。
 
 ```c
 if (this_parent != child->d_parent ||
@@ -41,13 +41,13 @@ if (this_parent != child->d_parent ||
 }
 ```
 
-Only the third clause, `need_seqretry()`, is actually protected by `rename_lock`. The other two — a changed parent pointer, or the `DCACHE_DENTRY_KILLED` flag — could each independently be true without any rename having happened at all.
+このうち実際に `rename_lock` で保護されているのは、3つ目の節 `need_seqretry()` だけである。他の2つ — 親ポインタの変化、あるいは `DCACHE_DENTRY_KILLED` フラグ — は、リネームが一切起きていなくても、それぞれ独立に真になりえた。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-`DCACHE_DENTRY_KILLED` is set by `__dentry_kill()`, called whenever a dentry is finally freed — a memory-pressure dcache shrink, an `rmdir()`, a `dput()` dropping the last reference. None of that touches `rename_lock`. So a dentry being pruned out from under the walker, with no rename anywhere in sight, tripped the exact same restart path as a genuine rename.
+`DCACHE_DENTRY_KILLED` は `__dentry_kill()` によってセットされる。これは dentry が最終的に解放されるときに必ず呼ばれる — メモリ逼迫時の dcache の縮小、`rmdir()`、最後の参照を手放す `dput()` などである。これらのどれも `rename_lock` には触れない。そのため、リネームがどこにも見当たらないのに、ウォーカーの足元から dentry が刈り込まれるだけで、本物のリネームとまったく同じ再スタートのパスが起動された。
 
-Jaegeuk Kim hit this independently in February 2014, running `fsstress` (a standard filesystem-stress tool) with ten threads on a 3.14-rc3 kernel, and posted a lockdep report to the list:
+Jaegeuk Kim は2014年2月、3.14-rc3 カーネル上で `fsstress`（標準的なファイルシステムのストレスツール）を10スレッドで実行していてこれに独立に遭遇し、lockdep の報告をメーリングリストに投稿した。
 
 ```
 [ INFO: possible recursive locking detected ]
@@ -57,41 +57,41 @@ but task is already holding lock:
 *** DEADLOCK ***
 ```
 
-He'd already spotted the shape of the problem: "I suspect that the upper conditions can trigger rename_retry even though rename_retry was done once before." Waiman Long replied the same day with essentially the fix's eventual approach: "It seems like the rename_lock may not be able to fully protect against the setting of the DCACHE_DENTRY_KILLED flag... I am 100% sure if we could just release the lock and let it try again without causing infinite loop." No public reply from Al Viro is visible in that thread, and the actual fix landed separately eight months later, credited to Red Hat's Prasad Pandit filing RHBZ #1159313 — the two reports appear to have converged independently on the same root cause rather than one causing the other.
+彼はすでに問題の形を見抜いていた。"I suspect that the upper conditions can trigger rename_retry even though rename_retry was done once before."（訳: 上の条件は、rename_retry が一度すでに行われていても、rename_retry を起動しうるのではないかと疑っている）。Waiman Long は同じ日に、事実上、修正が最終的にとったアプローチで返信した。"It seems like the rename_lock may not be able to fully protect against the setting of the DCACHE_DENTRY_KILLED flag... I am 100% sure if we could just release the lock and let it try again without causing infinite loop."（訳: rename_lock は DCACHE_DENTRY_KILLED フラグのセットに対して完全には保護できないようだ……無限ループを起こさずに、ロックを解放してもう一度試させることができるかどうか、100%確信している）。そのスレッドには Al Viro からの公開の返信は見当たらず、実際の修正は8か月後に別途入った。それは Red Hat の Prasad Pandit が RHBZ #1159313 を起票したことにクレジットされている — 2つの報告は、一方が他方を引き起こしたのではなく、独立に同じ根本原因に収束したように見える。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The restart escalates deliberately: the first `rename_retry` sets `seq = 1` and goes around again, and an odd `seq` makes `need_seqretry()`'s underlying `read_seqbegin_or_lock()` take `rename_lock`'s actual write lock instead of just sampling it — a guarantee-of-progress mechanism, since a lockless retry loop against an actively-changing tree could otherwise spin forever. But dentry killing was never gated on `rename_lock` either, so a *second* concurrent kill during that now-locked pass could trip the very same branch again — sending the walker back to `rename_retry` while it already held the write lock from the first escalation. Linux spinlocks aren't reentrant. The task spun forever trying to reacquire a lock it was already holding.
+再スタートは意図的にエスカレートする。最初の `rename_retry` は `seq = 1` をセットしてもう一周し、奇数の `seq` は、`need_seqretry()` の土台にある `read_seqbegin_or_lock()` に、単にサンプリングするのではなく `rename_lock` の実際の書き込みロックを取得させる — これは前進を保証する仕組みである。活発に変化するツリーに対するロックなしの再試行ループは、そうしなければ永遠に回り続けうるからである。しかし dentry の kill も `rename_lock` で制限されていなかったので、その今やロックされたパスの最中に*2度目*の並行する kill が起きると、まったく同じ分岐が再び起動されうる — ウォーカーは、最初のエスカレーションで取得した書き込みロックをすでに保持したまま、`rename_retry` に送り返される。Linux の spinlock は再入可能ではない。タスクは、すでに保持しているロックを再取得しようとして永遠にスピンした。
 
-Because `rename_lock`'s write side is also what every `d_move()`/`vfs_rename()` call needs, one CPU wedged this way didn't just hang the triggering thread — it froze every future rename on the machine. Kim's original report captured both halves of this: the lockdep splat on one CPU, and a completely separate "`BUG: soft lockup - CPU#0 stuck for 22s!`" on another CPU, spinning in `_raw_spin_lock` inside `vfs_rename()`. Debian's advisory later described the practical trigger in the same terms independently: "kernel functions that iterate over a directory tree can dead-lock or live-lock in case some of the directory entries were recently deleted or dropped from the cache."
+`rename_lock` の書き込み側は、すべての `d_move()`/`vfs_rename()` 呼び出しが必要とするものでもあるので、このように1つの CPU が詰まると、起動したスレッドがハングするだけでなく、マシン上のその後のすべてのリネームが凍結した。Kim の元の報告は、この両方の側面をとらえていた。一方の CPU での lockdep の警告と、別の CPU での、`vfs_rename()` 内の `_raw_spin_lock` でスピンしている、まったく別個の "`BUG: soft lockup - CPU#0 stuck for 22s!`" である。Debian のアドバイザリは後に、実際の起動条件を独立に同じ言葉で説明している。"kernel functions that iterate over a directory tree can dead-lock or live-lock in case some of the directory entries were recently deleted or dropped from the cache."（訳: ディレクトリツリーを反復するカーネル関数は、ディレクトリエントリの一部が最近削除されたかキャッシュから落とされた場合に、デッドロックまたはライブロックしうる）
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The bug conflated two genuinely different events — "the tree structure changed in a way that invalidates my position" (a rename, correctly protected by a seqlock) and "an entry I'm about to visit no longer exists" (a kill, a much more common and entirely unrelated event) — because both looked, from inside the walker, like "I can't trust what's below me anymore." Folding a frequent, ordinary event into the same recovery path built for a rare, tightly-synchronized one turned a routine dcache shrink into a self-inflicted deadlock.
+このバグは、本当に異なる2つのイベント — 「ツリー構造が、自分の位置を無効にするような形で変化した」（リネーム。seqlock で正しく保護されている）と、「これから訪れようとしているエントリがもう存在しない」（kill。はるかに頻繁で、まったく無関係なイベント）— を混同していた。ウォーカーの内側からは、どちらも「自分の下にあるものはもう信頼できない」ように見えたからである。頻繁でありふれたイベントを、まれで厳密に同期されたイベントのために作られた同じ回復パスに折り込んだことで、日常的な dcache の縮小が自ら招いたデッドロックに変わった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`ca5358ef75fc` ("deal with deadlock in d_walk()", Al Viro) stopped treating a killed sibling as a reason to restart the whole walk. Ascending now only triggers `rename_retry` for a genuine `need_seqretry()` failure — reinforced by a new `BUG_ON(seq & 1)` at the retry label, a hard assertion that a restart should never happen while already in locked mode. A killed child is instead skipped in place: a new inner loop walks forward through the sibling list (`child = list_entry(next, struct dentry, d_child); next = next->next;`) until it finds a live dentry to resume from, or reaches the end and ascends one level further.
+`ca5358ef75fc`（"deal with deadlock in d_walk()"、Al Viro）は、kill された兄弟を、ウォーク全体を再スタートする理由として扱うのをやめた。親に戻るときに `rename_retry` が起動されるのは、本物の `need_seqretry()` の失敗の場合だけになった — これは retry ラベルに新たに置かれた `BUG_ON(seq & 1)`、つまりすでにロックされたモードにある間は再スタートが決して起きてはならないという強いアサーションで補強されている。kill された子は、代わりにその場でスキップされる。新しい内側のループが兄弟リストを前方へたどり（`child = list_entry(next, struct dentry, d_child); next = next->next;`）、再開できる生きている dentry を見つけるか、末尾に達してさらに1レベル上に戻るまで進む。
 
-That skip loop depends on a second change in the same commit: in `__dentry_kill()`, `list_del()` — which unlinks a node *and* poisons its own `next`/`prev` pointers to catch use-after-removal bugs — became `__list_del_entry()`, which only does the unlinking. A just-killed dentry's `d_child.next` still points at its old next sibling, which is exactly what lets the new loop safely chase past a run of killed dentries to find where the live list resumes. A separate, same-day commit, `946e51f2bf37`, made that safe under RCU: it moved `d_rcu` off the union it had shared with `d_child` onto `d_alias` instead, so a dentry's RCU-deferred free no longer overwrites the `d_child` links the skip loop still needs to walk.
+このスキップループは、同じコミット内の2つ目の変更に依存している。`__dentry_kill()` において、`list_del()` — ノードをリンクから外す*と同時に*、削除後の使用バグを捕まえるために自身の `next`/`prev` ポインタを毒化する — が、リンクから外すことだけを行う `__list_del_entry()` に変わった。kill されたばかりの dentry の `d_child.next` は依然として以前の次の兄弟を指しており、まさにそれによって、新しいループは kill された dentry の連なりを安全に追い越して、生きているリストが再開する場所を見つけられる。同じ日の別のコミット `946e51f2bf37` は、これを RCU のもとで安全にした。`d_rcu` を、それまで `d_child` と共有していた union から外し、代わりに `d_alias` と重ねるようにしたのである。これにより、dentry の RCU による遅延解放が、スキップループがまだたどる必要のある `d_child` のリンクを上書きしなくなった。
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**A recovery path built for one class of concurrent change can silently start firing on a completely different, much more frequent one**, if both changes happen to trip the same flag or condition check. `rename_lock` was never meant to arbitrate dentry lifetime, only dentry position — but the ascend logic asked it to do both.
+**あるクラスの並行変更のために作られた回復パスが、まったく別の、はるかに頻繁なクラスの変更でも黙って発動し始めることがある**。両方の変更が、たまたま同じフラグや条件チェックを起動する場合である。`rename_lock` は dentry の寿命を調停するためのものではなく、dentry の位置だけを調停するためのものだった — しかし親に戻るロジックは、その両方をさせようとした。
 
-**Escalating a retry to a stronger lock only guarantees progress if every event that could trigger a *second* retry is itself excluded once that stronger lock is held.** The fix wasn't "take a bigger lock" — it was narrowing what's allowed to trigger a retry at all, so the escalated pass genuinely can't retrigger.
+**再試行をより強いロックへエスカレートさせて前進が保証されるのは、そのより強いロックを保持した時点で、*2度目*の再試行を起動しうるすべてのイベントがそれ自体排除されている場合だけである。** 修正は「より大きなロックを取る」ではなかった — そもそも何が再試行を起動してよいかを狭め、エスカレートしたパスが本当に再起動されえないようにすることだった。
 
-!!! warning "Pattern to watch for"
-    A retry-then-escalate-to-a-lock pattern (sample a seqlock, retry once lockless, retry again holding the write side) is only livelock-free if the *set of events that can trigger a retry* is proven disjoint from anything that can happen while already holding that lock. If a retry condition can be tripped by something unrelated to what the lock actually protects, the escalated pass can retrigger against a lock the same task already holds.
+!!! warning "注意すべきパターン"
+    再試行してからロックにエスカレートするパターン（seqlock をサンプリングし、ロックなしで1回再試行し、書き込み側を保持してもう一度再試行する）がライブロックしないのは、*再試行を起動しうるイベントの集合*が、そのロックをすでに保持している間に起こりうるあらゆることと交わらないことが証明されている場合だけである。ロックが実際に保護しているものと無関係な何かによって再試行条件が起動されうるなら、エスカレートしたパスは、同じタスクがすでに保持しているロックに対して再起動しうる。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [VFS Overview](../README.md) — the dentry cache and `rename_lock`'s role in path resolution
-- [RCU (Read-Copy-Update)](../../locking/rcu.md) — the RCU-protected traversal this fix's skip loop relies on
-- [Seqlock](../../locking/seqlock.md) — the seqlock-with-lock-fallback pattern `rename_lock` uses
+- [VFS の概要](../README.md) — dentry キャッシュと、パス解決における `rename_lock` の役割
+- [RCU（Read-Copy-Update）](../../locking/rcu.md) — この修正のスキップループが依存している、RCU で保護されたたどり
+- [Seqlock](../../locking/seqlock.md) — `rename_lock` が使う、ロックへのフォールバックを伴う seqlock のパターン
 
-## External references {#external-references}
+## 外部参考文献 {#external-references}
 
-- [git.kernel.org: ca5358ef75fc](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=ca5358ef75fc69fee5322a38a340f5739d997c10) — "deal with deadlock in d_walk()," the fix
-- [git.kernel.org: 946e51f2bf37](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=946e51f2bf37f1656916eb75bd0742ba33983c28) — "move d_rcu from overlapping d_child to overlapping d_alias," the same-day companion structural change
-- [NVD: CVE-2014-8559](https://nvd.nist.gov/vuln/detail/CVE-2014-8559) — CVE record, CVSS 5.5 MEDIUM, published November 10, 2014
+- [git.kernel.org: ca5358ef75fc](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=ca5358ef75fc69fee5322a38a340f5739d997c10) — "deal with deadlock in d_walk()"、修正
+- [git.kernel.org: 946e51f2bf37](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=946e51f2bf37f1656916eb75bd0742ba33983c28) — "move d_rcu from overlapping d_child to overlapping d_alias"、同じ日の対となる構造上の変更
+- [NVD: CVE-2014-8559](https://nvd.nist.gov/vuln/detail/CVE-2014-8559) — CVE レコード。CVSS 5.5 MEDIUM、2014年11月10日公開

@@ -1,75 +1,75 @@
-# The Xe TDR Recovery Regression Chain {#the-xe-tdr-recovery-regression-chain}
+# Xe TDR回復のリグレッション連鎖 {#the-xe-tdr-recovery-regression-chain}
 
-> A fix for one TDR bug on Intel Lunar Lake regressed a second time, and the fix for *that* regression crashed the kernel — three commits, twenty months, one driver
+> Intel Lunar LakeにおけるTDRのバグの修正が2度目のリグレッションを起こし、*その*リグレッションの修正がカーネルをクラッシュさせた。3つのコミット、20か月、1つのドライバ
 
-Landed
-:   November 2024 – July 2026 (three-commit chain)
+収録
+:   2024年11月 – 2026年7月（3コミットの連鎖）
 
-Driver
-:   Intel Xe (Lunar Lake and later)
+ドライバ
+:   Intel Xe（Lunar Lake以降）
 
-Authors
-:   Matthew Brost, Rodrigo Vivi (Intel)
+作者
+:   Matthew Brost、Rodrigo Vivi（Intel）
 
-Actively causing hangs
-:   yes, on affected hardware, until the final fix — not a CVE
+実際にハングを引き起こしていたか
+:   はい、影響を受けるハードウェア上で最終修正まで — CVEではない
 
-*Part of [War Stories: GPU/DRM Bugs and Regressions](../war-stories.md).*
+*[事件簿: GPU/DRMのバグとリグレッション](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-[Command Submission, `dma_fence`, and the GPU Scheduler](../command-submission.md) covers TDR (timeout detection and recovery) mechanically: `drm_sched_job_timedout()` fires when a job's timeout elapses, and the driver's `timedout_job()` callback decides what happens next — reset the hardware, or tell the scheduler `DRM_GPU_SCHED_STAT_NO_HANG` and let the job keep running. Xe's `guc_exec_queue_timedout_job()` is that callback for jobs submitted through Intel's GuC firmware scheduler.
+[コマンド投入、`dma_fence`、GPUスケジューラ](../command-submission.md)では、TDR（timeout detection and recovery、タイムアウト検出と回復）の仕組みを扱っている。ジョブのタイムアウトが経過すると `drm_sched_job_timedout()` が発火し、ドライバの `timedout_job()` コールバックが次に何が起こるかを決める。ハードウェアをリセットするか、スケジューラに `DRM_GPU_SCHED_STAT_NO_HANG` を伝えてジョブの実行を続けさせるかである。Xeの `guc_exec_queue_timedout_job()` は、IntelのGuCファームウェアスケジューラを通じて投入されたジョブに対するそのコールバックである。
 
-An earlier version of that callback treated a job that had never actually started running as a cheap case to skip: if the GuC hadn't even begun executing it, there was nothing to reset, so the handler could just let the timeout pass without further action.
+そのコールバックの以前のバージョンは、実際には一度も実行を開始していないジョブを、スキップしてよい軽いケースとして扱っていた。GuCがその実行を始めてさえいないなら、リセットするものは何もないので、ハンドラはそれ以上何もせずにタイムアウトをやり過ごせばよい、というわけである。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-On Lunar Lake, GuC could miss a GGTT (Global Graphics Translation Table) page update and simply never schedule a job at all. Because the callback specifically skipped jobs that hadn't started, this failure mode produced no recovery action whatsoever — the job sat forever, and nothing in the driver ever noticed.
+Lunar Lakeでは、GuCがGGTT（Global Graphics Translation Table）のページ更新を取りこぼし、ジョブをまったくスケジュールしないことがありえた。コールバックは開始していないジョブを明示的にスキップしていたため、この障害モードでは回復動作がまったく行われなかった。ジョブは永遠に放置され、ドライバのどこもそれに気づかなかった。
 
-Matthew Brost's fix, [`fe05cee4d953`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=fe05cee4d9533892210e1ee90147175d87e7c053) ("drm/xe: Don't short circuit TDR on jobs not started", October 2024), removed the short-circuit: on an unstarted job, the TDR now toggles scheduling to try to get the job unstuck, warns, and times the job out for real if a second TDR firing still finds it unstarted. That closed the original hang — and created the next one.
+Matthew Brostの修正 [`fe05cee4d953`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=fe05cee4d9533892210e1ee90147175d87e7c053)（"drm/xe: Don't short circuit TDR on jobs not started"、2024年10月）は、この短絡を取り除いた。開始していないジョブに対して、TDRはジョブを動かすためにスケジューリングを切り替え、警告を出し、2回目のTDRの発火でもまだ開始していなければ本当にジョブをタイムアウトさせるようになった。これで元のハングは解消されたが、次のハングが生まれた。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The revised handler now silently errored out an unstarted job instead of ever triggering a GT reset to actually recover the hardware. Rodrigo Vivi's fix nearly twenty months later, [`770031ec2312`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=770031ec2312bfab307d05db5469f24fd297e758) ("drm/xe: fix job timeout recovery for unstarted jobs and kernel queues", June 10, 2026), states the problem plainly: "A job that GuC never scheduled (never started) indicates a GuC scheduling failure; previously such jobs were silently errored out instead of triggering a GT reset to recover." For kernel queues — internal driver work, not user submissions — the fix goes further: they are "always recovered this way and wedge the device once recovery attempts are exhausted, since kernel work must not silently fail," in the commit's own words, unconditionally in a way a banned user queue's recovery isn't.
+修正後のハンドラは、ハードウェアを実際に回復させるためのGTリセットを一度も起動せずに、開始していないジョブを黙ってエラーにするようになった。約20か月後のRodrigo Viviの修正 [`770031ec2312`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=770031ec2312bfab307d05db5469f24fd297e758)（"drm/xe: fix job timeout recovery for unstarted jobs and kernel queues"、2026年6月10日）は、問題を率直に述べている。"A job that GuC never scheduled (never started) indicates a GuC scheduling failure; previously such jobs were silently errored out instead of triggering a GT reset to recover."（訳: GuCが一度もスケジュールしなかった（開始しなかった）ジョブは、GuCのスケジューリング障害を示している。以前はそのようなジョブは、回復のためにGTリセットを起動する代わりに、黙ってエラーにされていた。）カーネルキュー（ユーザーの投入ではなく、ドライバ内部の作業）については、修正はさらに踏み込む。コミット自身の言葉では、それらは "always recovered this way and wedge the device once recovery attempts are exhausted, since kernel work must not silently fail"（訳: 常にこの方法で回復され、回復の試みが尽きたらデバイスをwedgeする。カーネルの作業は黙って失敗してはならないからである）であり、BANされたユーザーキューの回復とは違って無条件である。
 
-That fix itself had a sharp edge, caught in review: an unstarted job on a queue that was *already* banned had to be left alone. Clearing the ban or forcing a GT reset on an intentionally-banned queue would resurrect userspace work the kernel had deliberately killed, and could turn a single bad queue into a GT-reset storm. The v3 revision added that carve-out explicitly.
+その修正自体にも、レビューで見つかった危うい点があった。*すでに*BANされたキュー上の開始していないジョブは、そのままにしておく必要があった。意図的にBANされたキューのBANを解除したりGTリセットを強制したりすると、カーネルが意図的に殺したユーザー空間の作業を復活させてしまい、1つの不良キューがGTリセットの嵐に変わりうる。v3のリビジョンで、その例外が明示的に追加された。
 
-Two days after Rodrigo Vivi wrote `770031ec2312`, it produced a crash of its own. [`d42df9dce7b3`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d42df9dce7b374079c5c41691bd62d8765768a80) ("drm/xe: wedge from the timeout handler only after releasing the queue", June 12, 2026) quotes the fault directly:
+Rodrigo Viviが `770031ec2312` を書いた2日後、それ自体がクラッシュを起こした。[`d42df9dce7b3`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d42df9dce7b374079c5c41691bd62d8765768a80)（"drm/xe: wedge from the timeout handler only after releasing the queue"、2026年6月12日）はフォールトを直接引用している。
 
 ```
 Oops: general protection fault ... 0x6b6b6b6b6b6b6c3b
 RIP: guc_exec_queue_timedout_job+...
 ```
 
-`0x6b6b6b6b6b6b6c3b` is SLUB's poison pattern for freed memory — the handler was dereferencing a job that no longer existed.
+`0x6b6b6b6b6b6b6c3b` は解放済みメモリに対するSLUBのポイズンパターンである。ハンドラは、もはや存在しないジョブを参照外ししていた。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-A kernel job that exhausted its recovery attempts called `xe_device_declare_wedged()` directly from inside `guc_exec_queue_timedout_job()`, while that same handler still held and was actively using the timed-out job and its scheduler. In Xe's default wedged mode, declaring the device wedged takes a destructive path that stops every queue's scheduler — including the one the TDR handler was still operating on — tearing down submission and signaling in-flight fences.
+回復の試みを使い果たしたカーネルジョブは、`guc_exec_queue_timedout_job()` の内部から直接 `xe_device_declare_wedged()` を呼んでいた。その間、同じハンドラはタイムアウトしたジョブとそのスケジューラをまだ保持し、積極的に使っていた。Xeのデフォルトのwedgedモードでは、デバイスをwedgedと宣言すると、すべてのキューのスケジューラ（TDRハンドラがまだ操作していたものを含む）を停止する破壊的なパスを通り、投入処理を破棄して実行中のフェンスをシグナルする。
 
-Control then returned to the handler, which kept using the now-stale job and scheduler: it called `drm_sched_for_each_pending_job()` on a scheduler that was no longer stopped (triggering a `WARN_ON`), and that iteration dereferenced a job the teardown had already freed. The wedge call was correct in isolation — it's the *right* thing to do when a kernel job can't be recovered — but calling it from inside a handler that still owned the very state it was about to tear down was not.
+その後制御はハンドラに戻り、ハンドラはもう古くなったジョブとスケジューラを使い続けた。もはや停止状態ではないスケジューラに対して `drm_sched_for_each_pending_job()` を呼び（`WARN_ON` を引き起こした）、その反復処理は破棄処理がすでに解放したジョブを参照外しした。wedgeの呼び出しは単独で見れば正しかった。カーネルジョブを回復できないときには、それが*正しい*行動である。しかし、まさに破棄しようとしている状態をまだ所有しているハンドラの内部からそれを呼ぶのは正しくなかった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`d42df9dce7b3` moved the wedge call to fire only after the handler is done operating on the queue, immediately before returning `DRM_GPU_SCHED_STAT_NO_HANG`, so the teardown can no longer race the handler's own use of the job and scheduler. All three commits touch the same function, `guc_exec_queue_timedout_job()` in `drivers/gpu/drm/xe/xe_guc_submit.c`; the last two each carry a `Fixes:` tag pointing at the commit immediately before them in this chain (the first commit's own `Fixes:` tag points further back, to the original job-timeout-sampling commit this whole chain works around).
+`d42df9dce7b3` は、wedgeの呼び出しを、ハンドラがキューの操作を終えた後、`DRM_GPU_SCHED_STAT_NO_HANG` を返す直前にだけ発火するよう移動した。これにより、破棄処理がハンドラ自身によるジョブとスケジューラの使用と競合することはなくなった。3つのコミットはすべて同じ関数、`drivers/gpu/drm/xe/xe_guc_submit.c` の `guc_exec_queue_timedout_job()` に触れている。後の2つはそれぞれ、この連鎖の直前のコミットを指す `Fixes:` タグを持つ（最初のコミット自身の `Fixes:` タグはさらに遡り、この連鎖全体が回避しようとしている、元のジョブタイムアウトのサンプリングのコミットを指している）。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**"Don't reset what isn't broken" and "always reset what's actually broken" are both correct, and the line between them is exactly where this regressed twice.** The original short-circuit skipped recovery for a case (unstarted jobs) that turned out to sometimes genuinely need it. The fix for that then recovered *every* unstarted job unconditionally, including ones that were unstarted because the kernel had deliberately banned them — recovering those was itself a bug.
+**「壊れていないものはリセットするな」と「本当に壊れているものは必ずリセットせよ」はどちらも正しく、その境界線こそが、ここで2度リグレッションした場所である。** 元の短絡は、時には本当に回復を必要とすることが判明したケース（開始していないジョブ）の回復をスキップしていた。それに対する修正は今度は、カーネルが意図的にBANしたために開始していなかったものも含めて、開始していない*すべての*ジョブを無条件に回復させた。それらを回復させること自体がバグだった。
 
-**A handler that tears down state should not still be using that state afterward.** The final crash wasn't a logic error in *when* to wedge the device — it was a lifetime error in *where*, relative to code still holding references into what wedging would free.
+**状態を破棄するハンドラは、その後もその状態を使い続けてはならない。** 最後のクラッシュは、デバイスを*いつ*wedgeするかの論理エラーではなかった。wedgeによって解放されるものへの参照をまだ保持しているコードとの相対で、*どこで*wedgeするかという寿命のエラーだった。
 
-!!! warning "Pattern to watch for"
-    Any timeout/recovery callback that can itself trigger a broader teardown (device wedge, GT reset, scheduler stop) needs to either finish using its own local state *before* triggering that teardown, or defer the teardown until after it returns. Grep for `_declare_wedged()`, `_reset()`, or similar destructive calls made from inside a `timedout_job()`-style callback while local job/queue/scheduler pointers are still in scope below that call.
+!!! warning "注意すべきパターン"
+    より広範な破棄（デバイスのwedge、GTリセット、スケジューラの停止）を自ら引き起こしうるタイムアウト／回復のコールバックは、その破棄を引き起こす*前に*自身のローカルな状態の使用を終えるか、戻った後まで破棄を遅らせる必要がある。`timedout_job()` 風のコールバックの内部で、その呼び出しより下でローカルなjob/queue/schedulerのポインタがまだスコープ内にある状態で行われている `_declare_wedged()`、`_reset()` などの破壊的な呼び出しをgrepすること。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Command Submission, `dma_fence`, and the GPU Scheduler](../command-submission.md) — the TDR mechanism this regression lives inside, and the `DRM_GPU_SCHED_STAT_NO_HANG` status this driver ultimately returns
-- [The `NO_HANG` False Positive](no-hang-false-positive.md) — a separate story about the same status value, on different drivers
-- [KMS Object Model and Atomic Modesetting](../kms.md) — the display side of the same subsystem
+- [コマンド投入、`dma_fence`、GPUスケジューラ](../command-submission.md) — このリグレッションが存在するTDRの仕組みと、このドライバが最終的に返す `DRM_GPU_SCHED_STAT_NO_HANG` ステータス
+- [`NO_HANG` の誤検知](no-hang-false-positive.md) — 同じステータス値についての、別のドライバでの別の話
+- [カーネルモード設定（KMS）のオブジェクトモデルとアトミックモード設定](../kms.md) — 同じサブシステムの表示側
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
 - [git.kernel.org: fe05cee4d953](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=fe05cee4d9533892210e1ee90147175d87e7c053) — "drm/xe: Don't short circuit TDR on jobs not started"
 - [git.kernel.org: 770031ec2312](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=770031ec2312bfab307d05db5469f24fd297e758) — "drm/xe: fix job timeout recovery for unstarted jobs and kernel queues"
-- [git.kernel.org: d42df9dce7b3](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d42df9dce7b374079c5c41691bd62d8765768a80) — "drm/xe: wedge from the timeout handler only after releasing the queue," including the full GPF trace
+- [git.kernel.org: d42df9dce7b3](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d42df9dce7b374079c5c41691bd62d8765768a80) — "drm/xe: wedge from the timeout handler only after releasing the queue"、完全なGPFトレースを含む

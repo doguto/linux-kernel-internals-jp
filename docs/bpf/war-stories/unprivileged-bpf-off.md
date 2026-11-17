@@ -1,29 +1,29 @@
-# Unprivileged BPF Off by Default {#unprivileged-bpf-off-by-default}
+# 非特権BPFのデフォルト無効化 {#unprivileged-bpf-off-by-default}
 
-> Not a CVE — the hardening response to years of them, and an admission that "safely unprivileged BPF" was a goal the subsystem had stopped pursuing
+> CVEではない。長年のCVEに対するハードニング上の回答であり、「非特権でも安全なBPF」がサブシステムとして追求をやめた目標であることを認めたものである
 
-Landed
-:   May 11, 2021
+投入日
+:   2021年5月11日
 
-Author
+作者
 :   Daniel Borkmann
 
-Merged in
-:   [`08389d888287`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08389d888287c3823f80b0216766b71e17f0aba5), mainline v5.13-rc4
+マージ先
+:   [`08389d888287`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08389d888287c3823f80b0216766b71e17f0aba5)、メインライン v5.13-rc4
 
-Mechanism
+仕組み
 :   `CONFIG_BPF_UNPRIV_DEFAULT_OFF`
 
-Context
-:   [LWN 796328](https://lwn.net/Articles/796328/), "Reconsidering unprivileged BPF" (Jonathan Corbet, August 2019)
+背景
+:   [LWN 796328](https://lwn.net/Articles/796328/)、"Reconsidering unprivileged BPF"（Jonathan Corbet、2019年8月）
 
-*Part of [War Stories: BPF Verifier Bugs and CVEs](../war-stories.md).*
+*[事件簿: BPF verifierのバグとCVE](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-BPF's original ambition included a specific, load-bearing claim: that the verifier could make it safe to let an *unprivileged* user load programs into the kernel. Every other incident in [this series](../war-stories.md) is a bug in the machinery built to honor that claim.
+BPFの当初の野心には、具体的で、全体を支える重要な主張が含まれていた。それは、verifierによって*非特権*ユーザーにカーネルへプログラムをロードさせても安全にできる、というものである。[このシリーズ](../war-stories.md)の他のすべての事件は、この主張を守るために作られた仕組みのバグである。
 
-The runtime switch for it was `/proc/sys/kernel/unprivileged_bpf_disabled`, and it was a one-way latch. The sysctl table entry says so in a comment:
+その実行時スイッチは`/proc/sys/kernel/unprivileged_bpf_disabled`であり、一方向のラッチだった。sysctlテーブルのエントリにはコメントでそう書かれている:
 
 ```c
 /* kernel/sysctl.c, before the change */
@@ -33,57 +33,65 @@ The runtime switch for it was `/proc/sys/kernel/unprivileged_bpf_disabled`, and 
 	.extra2		= SYSCTL_ONE,
 ```
 
-`extra1 == extra2 == 1` means the only value the handler would accept was 1. You could turn unprivileged BPF off; you could never turn it back on without rebooting. And the compiled-in default was 0 — on.
+`extra1 == extra2 == 1`は、ハンドラが受け付ける値が1だけであることを意味する。非特権BPFを無効にすることはできたが、再起動せずに再び有効に戻すことは決してできなかった。そしてコンパイル時のデフォルトは0、つまり有効だった。
 
-A partial answer had already landed a year earlier. [`2c78ee898d8f`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2c78ee898d8f10ae6fb2fa23a3fbaec96b1b7366) ("bpf: Implement CAP_BPF", merged May 2020) split the verifier's single `allow_ptr_leaks` flag into four — `allow_ptr_leaks`, `bypass_spec_v1`, `bypass_spec_v4`, `bpf_capable` — so that a process could be granted the ability to load BPF programs without also being granted the ability to bypass speculative-execution mitigations. That gave administrators a middle setting between "root" and "anyone." It did not change what happened on a machine where nobody had configured anything. Unlike the default-off knob, `CAP_BPF` got the public argument in full: [Starovoitov's original posting](https://lore.kernel.org/all/20190827205213.456318-1-ast@kernel.org/) in August 2019 drew dozens of replies, and the design was reworked over later postings before merging about eight and a half months later.
+部分的な回答はその1年前にすでに投入されていた。[`2c78ee898d8f`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2c78ee898d8f10ae6fb2fa23a3fbaec96b1b7366)（"bpf: Implement CAP_BPF"、2020年5月マージ）は、verifierの単一の`allow_ptr_leaks`フラグを`allow_ptr_leaks`、`bypass_spec_v1`、`bypass_spec_v4`、`bpf_capable`の4つに分割した。これにより、プロセスに対して、投機的実行の緩和策を回避する能力まで与えることなく、BPFプログラムをロードする能力だけを付与できるようになった。これは管理者に「root」と「誰でも」の中間の設定を与えた。しかし、誰も何も設定していないマシンで起きることは変わらなかった。デフォルト無効化のノブとは違い、`CAP_BPF`は公開の場で十分に議論された。2019年8月の[Starovoitovの最初の投稿](https://lore.kernel.org/all/20190827205213.456318-1-ast@kernel.org/)には数十の返信が付き、設計はその後の投稿を通じて作り直され、約8か月半後にマージされた。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-The argument that produced this change is older than the change, and LWN documented it in August 2019 — nearly two years before the patch — in [Reconsidering unprivileged BPF](https://lwn.net/Articles/796328/). Corbet's framing:
+この変更を生んだ議論は変更そのものより古く、LWNはパッチのほぼ2年前、2019年8月に[Reconsidering unprivileged BPF](https://lwn.net/Articles/796328/)でそれを記録している。Corbetの捉え方は次のとおりである:
 
 > A recent discussion has made it clear, though, that the goal of opening up BPF to unprivileged users has been abandoned as unachievable, and that further work in that direction will not be accepted by the BPF maintainer.
 
-Andy Lutomirski's objection is worth preserving because the disagreement was never actually resolved on the merits — it was resolved by shipping a knob:
+（訳: しかし最近の議論で、BPFを非特権ユーザーに開放するという目標は達成不可能として放棄されており、その方向へのさらなる作業はBPFメンテナに受け入れられないことが明らかになった。）
+
+Andy Lutomirskiの反論は記録しておく価値がある。この意見の相違は実際には中身の議論で決着したことはなく、ノブを出荷することで決着したからである:
 
 > I hope not. There are a couple setsockopt uses right now, and and seccomp will surely want it someday. And the bpf-inside-container use case really is unprivileged bpf -- containers are, in many (most?) cases, explicitly not trusted by the host.
 
-BPF maintainer Alexei Starovoitov replied that, as Corbet summarizes it, "Linux has become a single-user system" in which any code execution at all is a path to root. He continued:
+（訳: そうでないことを願う。現在すでにsetsockoptでの用途がいくつかあり、seccompもいつか必ずそれを必要とするだろう。そしてコンテナ内BPFのユースケースは実際に非特権BPFである。コンテナは多くの（大半の？）場合、明示的にホストから信頼されていない。）
+
+BPFメンテナのAlexei Starovoitovは、Corbetの要約によれば「Linuxはシングルユーザーシステムになった」、つまりコード実行がひとつでもあればそれがrootへの経路になる、と返答した。彼はさらに続けた:
 
 > When we say 'unprivileged bpf' we really mean arbitrary malicious bpf program. It's been a constant source of pain. The constant blinding, randomization, verifier speculative analysis, all spectre v1, v2, v4 mitigations are simply not worth it. It's a lot of complex kernel code without users. There is not a single use case to allow arbitrary malicious bpf program to be loaded and executed.
 
-Lutomirski's counter-counter: "There aren't major unprivileged eBPF users because the kernel support isn't there."
+（訳: 「非特権BPF」と言うとき、実際には任意の悪意あるBPFプログラムを意味している。それは絶え間ない苦痛の種だった。定数ブラインディング、ランダム化、verifierの投機的解析、spectre v1、v2、v4のすべての緩和策は、単純に割に合わない。ユーザーのいない大量の複雑なカーネルコードだ。任意の悪意あるBPFプログラムのロードと実行を許すべきユースケースはひとつもない。）
 
-Corbet ends the 2019 article without picking a side, but names the stakes precisely:
+Lutomirskiの再反論は「非特権eBPFの主要なユーザーがいないのは、カーネルのサポートがないからだ」というものだった。
+
+Corbetは2019年の記事をどちらの側にも立たずに締めくくっているが、何が懸かっているかは正確に言い当てている:
 
 > At its core, it's a fundamental difference of opinion over whether a Linux system can ever be truly hardened against an unprivileged user. If the answer is "no", then there is little point in maintaining a lot of complex code in the BPF subsystem to try to effect that hardening. Accepting that answer, though, is tantamount to saying that the Linux privilege model just doesn't work in the end: the combination of software bugs and hardware vulnerabilities will always undermine it, so we might as well just give up. That would be a discouraging conclusion to say the least.
 
-Then came 2021. Within five weeks the subsystem authored fixes for [CVE-2021-31440](alu32-unsigned-bounds.md) (April 23), [CVE-2021-3490](alu32-bitwise-bounds.md) (May 10, publicly announced May 11), and [CVE-2021-33624](spectre-verifier.md) (May 28) — all reachable by an unprivileged process on a default-configured kernel.
+（訳: その核心にあるのは、Linuxシステムを非特権ユーザーに対して本当にハードニングできるのかどうかについての根本的な意見の相違である。答えが「いいえ」なら、そのハードニングを実現しようとしてBPFサブシステムに大量の複雑なコードを保守する意味はほとんどない。しかしその答えを受け入れることは、Linuxの特権モデルは結局のところ機能しない、と言うに等しい。ソフトウェアのバグとハードウェアの脆弱性の組み合わせが常にそれを損なうのだから、諦めたほうがよい、と。控えめに言っても気の滅入る結論である。）
 
-## Observed behavior {#observed-behavior}
+そして2021年が来た。5週間のうちに、サブシステムは[CVE-2021-31440](alu32-unsigned-bounds.md)（4月23日）、[CVE-2021-3490](alu32-bitwise-bounds.md)（5月10日、公表は5月11日）、[CVE-2021-33624](spectre-verifier.md)（5月28日）の修正を作成した。いずれもデフォルト設定のカーネル上で非特権プロセスから到達可能なものだった。
 
-Borkmann posted the knob on **May 11, 2021** — the same day CVE-2021-3490 was publicly announced on oss-security.
+## 観測された挙動 {#observed-behavior}
 
-It went out as a two-patch series to `bpf@vger.kernel.org`. Patch 1/2 ("bpf, kconfig: Add consolidated menu entry for bpf with core options") created `kernel/bpf/Kconfig` and pulled BPF's options together from `init/Kconfig` and `net/Kconfig` into a single `General setup → BPF subsystem` menu, because "all core BPF related options are scattered in different Kconfig locations mainly due to historic reasons." Patch 2/2 added the knob into that new menu.
+Borkmannがノブを投稿したのは**2021年5月11日**で、CVE-2021-3490がoss-securityで公表されたのと同じ日である。
 
-The [thread](https://lore.kernel.org/all/f23f58765a4d59244ebd8037da7b6a6b2fb58446.1620765074.git.daniel@iogearbox.net/) drew no public replies. After two years of argument on the topic, the patch that changed the default went in without one.
+それは`bpf@vger.kernel.org`への2パッチのシリーズとして送られた。パッチ1/2（"bpf, kconfig: Add consolidated menu entry for bpf with core options"）は`kernel/bpf/Kconfig`を作成し、BPFのオプションを`init/Kconfig`と`net/Kconfig`から単一の`General setup → BPF subsystem`メニューにまとめた。理由は「BPFのコア関連オプションは、主に歴史的な理由から、さまざまなKconfigの場所に散らばっている」からである。パッチ2/2はその新しいメニューにノブを追加した。
 
-## Why it happened {#why-it-happened}
+その[スレッド](https://lore.kernel.org/all/f23f58765a4d59244ebd8037da7b6a6b2fb58446.1620765074.git.daniel@iogearbox.net/)には公開の返信がひとつも付かなかった。この話題で2年間議論が続いた後、デフォルトを変えるパッチは返信なしで取り込まれた。
 
-The 2019 impasse is the whole explanation, and it is a design disagreement rather than a mistake.
+## なぜ起きたか {#why-it-happened}
 
-BPF's unprivileged-safety goal required the verifier to be a sound security boundary against a hostile program author. Speculative-execution attacks and a steady stream of arithmetic-tracking bugs made that boundary expensive to hold and, in Starovoitov's judgment, not worth holding. Meanwhile the actual users of BPF — tracing tools, network dataplanes, systemd, cgroup hooks — all run privileged anyway.
+2019年の膠着状態がすべての説明であり、それは誤りではなく設計上の意見の相違である。
 
-So the cost of the guarantee was concentrated in the subsystem, and the benefit was concentrated in use cases that either did not exist yet or could be served by a narrower capability. `CAP_BPF` in 2020 built the narrower capability. This patch changed which side of the trade-off you land on when you configure nothing.
+BPFの非特権安全性という目標は、verifierが敵対的なプログラム作者に対する健全なセキュリティ境界であることを要求した。投機的実行攻撃と、算術追跡のバグが絶え間なく見つかることによって、その境界を維持するコストは高くなり、Starovoitovの判断では維持する価値がなくなった。一方で、BPFの実際のユーザー、つまりトレーシングツール、ネットワークのデータプレーン、systemd、cgroupフックは、いずれにせよすべて特権で動いている。
 
-Note what the change specifically is *not*: it does not remove unprivileged BPF, and it does not make the existing off switch permanent. It changes a default and makes the switch two-way.
+つまり保証のコストはサブシステムに集中し、その恩恵は、まだ存在しないか、より狭いケイパビリティで対応できるユースケースに集中していた。2020年の`CAP_BPF`がその狭いケイパビリティを作った。このパッチは、何も設定しないときにトレードオフのどちら側に落ちるかを変えたのである。
 
-The `CONFIG_BPF_UNPRIV_DEFAULT_OFF` option itself started out as something a builder had to opt into — it carried no `default` in `kernel/bpf/Kconfig` when this patch merged, so it stayed off unless a config explicitly enabled it. That changed five months later: [`8a03e56b253e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8a03e56b253e9691c90bc52ca199323d71b96204) ("bpf: Disallow unprivileged bpf by default", Pawan Gupta, October 29 2021, mainline v5.16) added `default y` to the option, explicitly "to sync with what many distros are currently applying already." From v5.16 on, unprivileged BPF being disabled (value 2) *is* the upstream default for any kernel that doesn't override it — not just a distributor's choice layered on top.
+この変更が具体的に何で*ない*かに注意してほしい。非特権BPFを削除するものではなく、既存の無効化スイッチを永続的にするものでもない。デフォルトを変え、スイッチを双方向にするものである。
 
-## Resolution {#resolution}
+`CONFIG_BPF_UNPRIV_DEFAULT_OFF`オプション自体は、当初はビルドする側がオプトインしなければならないものだった。このパッチがマージされた時点では`kernel/bpf/Kconfig`に`default`が付いておらず、configで明示的に有効にしない限りオフのままだった。それは5か月後に変わった。[`8a03e56b253e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8a03e56b253e9691c90bc52ca199323d71b96204)（"bpf: Disallow unprivileged bpf by default"、Pawan Gupta、2021年10月29日、メインライン v5.16）がこのオプションに`default y`を追加した。明示的に「多くのディストリビューションがすでに適用しているものと同期するため」である。v5.16以降、非特権BPFが無効（値2）であることは、上書きしないすべてのカーネルにとってアップストリームのデフォルト*そのもの*であり、単にディストリビュータがその上に重ねた選択ではない。
 
-[`08389d888287`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08389d888287c3823f80b0216766b71e17f0aba5) ("bpf: Add kconfig knob for disabling unpriv bpf by default", v5.13-rc4) does three things.
+## 解決 {#resolution}
 
-It adds the kconfig option:
+[`08389d888287`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08389d888287c3823f80b0216766b71e17f0aba5)（"bpf: Add kconfig knob for disabling unpriv bpf by default"、v5.13-rc4）は3つのことを行う。
+
+kconfigオプションを追加する:
 
 ```
 config BPF_UNPRIV_DEFAULT_OFF
@@ -97,22 +105,22 @@ config BPF_UNPRIV_DEFAULT_OFF
 	  0 is possible anymore).
 ```
 
-It wires that into the sysctl's initial value:
+それをsysctlの初期値に結び付ける:
 
 ```c
 int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;
 ```
 
-And it introduces a third state. The sysctl is no longer a boolean with a latch; it is a three-valued setting, documented in `Documentation/admin-guide/sysctl/kernel.rst` by the same patch:
+そして3つ目の状態を導入する。sysctlはもはやラッチ付きのブール値ではなく、3値の設定である。同じパッチで`Documentation/admin-guide/sysctl/kernel.rst`に文書化されている:
 
-| Value | Meaning |
+| 値 | 意味 |
 | --- | --- |
-| 0 | Unprivileged calls to `bpf()` are enabled |
-| 1 | Unprivileged calls to `bpf()` are disabled **without recovery** |
-| 2 | Unprivileged calls to `bpf()` are disabled |
+| 0 | `bpf()`の非特権呼び出しは有効 |
+| 1 | `bpf()`の非特権呼び出しは無効で、**元に戻せない** |
+| 2 | `bpf()`の非特権呼び出しは無効 |
 
-The distinction between 1 and 2 is the design's whole subtlety, and it is enforced by a purpose-built handler rather than the generic `proc_dointvec_minmax`:
+1と2の区別がこの設計の微妙な点のすべてであり、汎用の`proc_dointvec_minmax`ではなく専用のハンドラによって強制される:
 
 ```c
 /* kernel/sysctl.c, added by 08389d888287 */
@@ -137,44 +145,44 @@ static int bpf_unpriv_handler(struct ctl_table *table, int write,
 }
 ```
 
-`locked_state` preserves the old one-way behavior for anyone who had already written 1: once permanently disabled, it stays permanently disabled. But a kernel that booted into 2 can be moved to 0 by an administrator who needs unprivileged BPF for something, and can be moved to 1 to lock it down for good. The commit's summary: "This still allows a transition of 2 -> {0,1} through an admin. Similarly, this also still keeps 1 -> {1} behavior intact, so that once set to permanently disabled, it cannot be undone aside from a reboot."
+`locked_state`は、すでに1を書き込んでいた人のために、従来の一方向の挙動を保つ。いったん永続的に無効化されれば、永続的に無効化されたままである。しかし2で起動したカーネルは、何かのために非特権BPFを必要とする管理者が0に変更でき、また1に変更して永久にロックダウンすることもできる。コミットの要約は次のとおり:「This still allows a transition of 2 -> {0,1} through an admin. Similarly, this also still keeps 1 -> {1} behavior intact, so that once set to permanently disabled, it cannot be undone aside from a reboot.」（訳: これにより、管理者による2 -> {0,1}の遷移は引き続き可能である。同様に、1 -> {1}の挙動もそのまま維持されるため、いったん永続的な無効化に設定されると、再起動以外では元に戻せない。）
 
-The `extra1`/`extra2` bounds change from `SYSCTL_ONE`/`SYSCTL_ONE` to `SYSCTL_ZERO`/`two`, which is what makes writes of 0 and 2 reachable at all.
+`extra1`/`extra2`の範囲は`SYSCTL_ONE`/`SYSCTL_ONE`から`SYSCTL_ZERO`/`two`に変わる。これこそが、0と2の書き込みをそもそも可能にしている部分である。
 
-The commit also points at the middle path the subsystem had already built: "Either way, as an additional alternative, applications can make use of CAP_BPF that we added a while ago."
+コミットはまた、サブシステムがすでに作っていた中間の道も指し示している:「Either way, as an additional alternative, applications can make use of CAP_BPF that we added a while ago.」（訳: いずれにせよ、追加の代替手段として、アプリケーションは少し前に追加したCAP_BPFを利用できる。）
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A security guarantee nobody can hold is worse than an honest default.** The 2019 discussion is uncomfortable reading precisely because Starovoitov is not arguing that unprivileged BPF is hard; he is arguing that it is not worth doing, and that the code written to make it safe is "a lot of complex kernel code without users." Whether or not you agree, the outcome — turn it off by default, keep the capability for those who ask — is more honest than shipping a boundary the maintainers privately do not believe in.
+**誰も維持できないセキュリティ保証は、正直なデフォルトよりも悪い**。2019年の議論が読んでいて居心地が悪いのは、まさにStarovoitovが非特権BPFは難しいと主張しているのではなく、やる価値がないと主張しており、それを安全にするために書かれたコードは「ユーザーのいない大量の複雑なカーネルコード」だと主張しているからである。賛成するかどうかにかかわらず、その結末、つまりデフォルトで無効にし、求める人にはケイパビリティを残すという結末は、メンテナが内心では信じていない境界を出荷するよりも正直である。
 
-**Two-way switches get used; one-way switches get avoided.** The original latch was well-intentioned: once disabled, an attacker cannot re-enable it. In practice it meant an administrator who might need BPF later had to leave it on, because turning it off was irreversible without a reboot. Adding value 2 — off, but recoverable — cost one small purpose-built sysctl handler and made the safe default adoptable. The irreversible state stayed available for those who wanted it.
+**双方向のスイッチは使われ、一方向のスイッチは避けられる**。元のラッチは善意によるものだった。いったん無効にすれば、攻撃者はそれを再び有効にできない。しかし実際には、後でBPFを必要とするかもしれない管理者は、無効化が再起動なしでは元に戻せないため、有効のままにしておかざるをえなかった。値2、つまり無効だが回復可能な状態を追加するコストは、小さな専用のsysctlハンドラひとつだけであり、それによって安全なデフォルトが採用可能になった。元に戻せない状態は、それを望む人のために引き続き利用できた。
 
-**Capabilities are the right granularity, but only if the default is right.** `CAP_BPF` merged in May 2020 and split BPF loading from `CAP_SYS_ADMIN` and from Spectre-mitigation bypass. It did not help a single unconfigured machine. The default is the security posture for almost everyone; the capability is the security posture for the people who read the documentation.
+**ケイパビリティは正しい粒度だが、それはデフォルトが正しい場合に限る**。`CAP_BPF`は2020年5月にマージされ、BPFのロードを`CAP_SYS_ADMIN`から、またSpectre緩和策の回避から分離した。しかし設定されていないマシンを1台も助けなかった。デフォルトはほぼ全員にとってのセキュリティ態勢であり、ケイパビリティはドキュメントを読む人にとってのセキュリティ態勢である。
 
-!!! warning "Pattern to watch for"
-    Check what your kernel actually does — since v5.16 the disabled state (2) is the upstream default, but a kernel built without `CONFIG_BPF_UNPRIV_DEFAULT_OFF`, or one on an older release, will still ship with unprivileged BPF enabled:
+!!! warning "注意すべきパターン"
+    自分のカーネルが実際にどう動くかを確認すること。v5.16以降は無効状態（2）がアップストリームのデフォルトだが、`CONFIG_BPF_UNPRIV_DEFAULT_OFF`なしでビルドされたカーネルや、古いリリースのカーネルは、依然として非特権BPFが有効な状態で出荷される:
 
     ```bash
-    # 0 = unprivileged bpf() allowed; 1 = disabled, irreversible; 2 = disabled, admin can re-enable
+    # 0 = 非特権bpf()を許可、1 = 無効で元に戻せない、2 = 無効だが管理者が再有効化可能
     sysctl kernel.unprivileged_bpf_disabled
     ```
 
-    More generally: when a subsystem adds a hardening *option* rather than changing behavior directly, there's a window — five months, in this case — where the security work is still delegated to whoever configures the build, before (if ever) the option itself defaults on. Audit for options like this that your kernel predates or was built without, and treat any capability-splitting patch (`CAP_BPF`, `CAP_PERFMON`, `CAP_CHECKPOINT_RESTORE`) as having a matching "what happens if nobody configures anything?" question attached.
+    より一般的には、サブシステムが挙動を直接変えるのではなくハードニングの*オプション*を追加した場合、オプション自体がデフォルトで有効になるまで（もしなるとすれば）、セキュリティ作業がビルドを設定する人に委ねられたままの期間が生じる。今回の場合は5か月だった。自分のカーネルがそれ以前のものである、あるいはそれなしでビルドされたこのようなオプションを監査し、ケイパビリティを分割するパッチ（`CAP_BPF`、`CAP_PERFMON`、`CAP_CHECKPOINT_RESTORE`）にはすべて「誰も何も設定しなかったらどうなるか？」という問いが付随しているものとして扱うこと。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [BPF Verifier](../bpf-verifier.md) — including what the verifier does differently for privileged versus unprivileged loaders
-- [Linux Capabilities](../../security/capabilities.md) — the model `CAP_BPF` splits `bpf()` loading out of
-- [Spectre in the BPF Verifier](spectre-verifier.md) — the third of the 2021 verifier CVEs, fixed two and a half weeks after this knob was posted
-- [ALU32 Bitwise Bounds Tracking](alu32-bitwise-bounds.md) — publicly announced the same day this patch was posted
-- [Kernel Hardening](../../security/kernel-hardening.md) — the other build-time hardening options (KASLR, stack protectors, `HARDENED_USERCOPY`) worth auditing alongside this one
-- [seccomp BPF](../../security/seccomp.md) — the classic-BPF user Lutomirski cited as a real unprivileged-BPF use case
+- [BPF Verifier](../bpf-verifier.md) — 特権ローダーと非特権ローダーでverifierが何を変えるかを含む
+- [Linuxケイパビリティ](../../security/capabilities.md) — `CAP_BPF`が`bpf()`のロードを切り出す元となったモデル
+- [BPF verifierにおけるSpectre](spectre-verifier.md) — 2021年のverifier CVEの3つ目。このノブの投稿から2週間半後に修正された
+- [ALU32ビット演算の範囲追跡](alu32-bitwise-bounds.md) — このパッチが投稿されたのと同じ日に公表された
+- [カーネルハードニング](../../security/kernel-hardening.md) — これと併せて監査する価値のある、その他のビルド時ハードニングオプション（KASLR、スタックプロテクタ、`HARDENED_USERCOPY`）
+- [seccomp BPF](../../security/seccomp.md) — Lutomirskiが実在する非特権BPFのユースケースとして挙げたclassic BPFのユーザー
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: 08389d888287](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08389d888287c3823f80b0216766b71e17f0aba5) — "bpf: Add kconfig knob for disabling unpriv bpf by default", the kconfig option, the three-valued sysctl, and the new handler
-- [git.kernel.org: 8a03e56b253e](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8a03e56b253e9691c90bc52ca199323d71b96204) — "bpf: Disallow unprivileged bpf by default" (Pawan Gupta, October 2021, v5.16), the commit that gave `CONFIG_BPF_UNPRIV_DEFAULT_OFF` its `default y`
-- [lore.kernel.org: the two-patch series](https://lore.kernel.org/all/f23f58765a4d59244ebd8037da7b6a6b2fb58446.1620765074.git.daniel@iogearbox.net/) — posted May 11, 2021 to `bpf@vger.kernel.org`; no public replies
-- [git.kernel.org: 2c78ee898d8f](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2c78ee898d8f10ae6fb2fa23a3fbaec96b1b7366) — "bpf: Implement CAP_BPF" (May 2020), which split `allow_ptr_leaks` into four separate verifier permissions
-- [LWN: Reconsidering unprivileged BPF](https://lwn.net/Articles/796328/) — Jonathan Corbet, August 16, 2019; the Starovoitov/Lutomirski exchange this change eventually settled
-- [kernel.org: `unprivileged_bpf_disabled`](https://docs.kernel.org/admin-guide/sysctl/kernel.html) — the sysctl documentation this patch rewrote
+- [git.kernel.org: 08389d888287](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08389d888287c3823f80b0216766b71e17f0aba5) — "bpf: Add kconfig knob for disabling unpriv bpf by default"。kconfigオプション、3値のsysctl、新しいハンドラ
+- [git.kernel.org: 8a03e56b253e](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8a03e56b253e9691c90bc52ca199323d71b96204) — "bpf: Disallow unprivileged bpf by default"（Pawan Gupta、2021年10月、v5.16）。`CONFIG_BPF_UNPRIV_DEFAULT_OFF`に`default y`を付けたコミット
+- [lore.kernel.org: 2パッチのシリーズ](https://lore.kernel.org/all/f23f58765a4d59244ebd8037da7b6a6b2fb58446.1620765074.git.daniel@iogearbox.net/) — 2021年5月11日に`bpf@vger.kernel.org`へ投稿。公開の返信なし
+- [git.kernel.org: 2c78ee898d8f](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2c78ee898d8f10ae6fb2fa23a3fbaec96b1b7366) — "bpf: Implement CAP_BPF"（2020年5月）。`allow_ptr_leaks`を4つの別々のverifier権限に分割した
+- [LWN: Reconsidering unprivileged BPF](https://lwn.net/Articles/796328/) — Jonathan Corbet、2019年8月16日。この変更が最終的に決着させたStarovoitovとLutomirskiのやり取り
+- [kernel.org: `unprivileged_bpf_disabled`](https://docs.kernel.org/admin-guide/sysctl/kernel.html) — このパッチが書き換えたsysctlのドキュメント

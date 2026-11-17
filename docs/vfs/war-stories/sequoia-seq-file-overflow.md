@@ -1,33 +1,33 @@
-# Sequoia: The seq_file Size-Truncation Overflow {#sequoia-the-seq_file-size-truncation-overflow}
+# Sequoia：seq_file のサイズ切り詰めによるオーバーフロー {#sequoia-the-seq_file-size-truncation-overflow}
 
-> CVE-2021-33909 — a `size_t` buffer size, silently narrowed to a 32-bit `int` since the day `dentry_path()` was written, stayed unreachable until a 2014 fix for an unrelated allocation-failure bug made it possible to grow a buffer large enough to trigger it — and then sat unreachable-in-practice for seven more years until someone went looking, turning "make a very long directory path" into an exact, attacker-chosen out-of-bounds write
+> CVE-2021-33909 — `dentry_path()` が書かれた日から黙って32ビットの `int` に縮小されていた `size_t` のバッファサイズは、無関係な割り当て失敗のバグに対する2014年の修正によって、それを起動できるほど大きなバッファを育てられるようになるまで、到達不能のままだった — そしてその後さらに7年間、誰かが探しに行くまで実質的に到達不能のまま眠っていた。それは「非常に長いディレクトリパスを作る」ことを、攻撃者が選んだ正確な範囲外書き込みに変えた
 
-Disclosed
-:   July 20, 2021 (coordinated with Red Hat, kernel security list, and linux-distros)
+公開日
+:   2021年7月20日（Red Hat、カーネルセキュリティリスト、linux-distros と協調）
 
-Reported by
+報告者
 :   Qualys Research Team
 
 CVSS
-:   7.8 HIGH (`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`)
+:   7.8 HIGH（`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`）
 
-Bug present since
-:   3.16 (July 2014, when the vmalloc fallback landed; the 3.16 release itself followed in August); exploitable through 5.13.3
+バグの混入時期
+:   3.16（2014年7月に vmalloc フォールバックがマージされた。3.16 リリース自体は8月）。5.13.3 まで悪用可能
 
-Fixed in
-:   commit `8cae8cd89f05`, fast-tracked to the 5.13.4 stable point release; reached Linus's mainline tree as part of the Linux 5.14 development cycle
+修正
+:   commit `8cae8cd89f05`。5.13.4 の stable ポイントリリースに優先的に取り込まれ、Linux 5.14 の開発サイクルの一部として Linus のメインラインツリーに入った
 
-Exploit tool
-:   yes — Qualys built and privately demonstrated a working local-root exploit; a crasher PoC was published with the advisory
+エクスプロイトツール
+:   あり — Qualys は動作するローカル root エクスプロイトを作成して非公開でデモした。クラッシュさせる PoC はアドバイザリとともに公開された
 
-Actively exploited
-:   no confirmed cases (not on CISA KEV)
+実際の悪用
+:   確認された事例はない（CISA KEV には掲載されていない）
 
-*Part of [War Stories: VFS Bugs and Regressions](../war-stories.md).*
+*[事件簿：VFS のバグとリグレッション](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-`single_open()` and friends give a `seq_file` exactly one shot at producing its entire output in one buffer — no incremental chunking. When that output doesn't fit, `fs/seq_file.c` doubles the buffer and tries again. Originally that meant `kmalloc()`, which simply failed outright for large, hard-to-satisfy allocations under memory fragmentation — a real problem: [`058504edd026`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=058504edd02667eef8fac9be27ab3ea74332e9b4) ("fs/seq_file: fallback to vmalloc allocation", Heiko Carstens, July 2014) fixed genuine `/proc/stat` read failures on fragmented systems by adding a fallback: if `kmalloc()` fails and the request is bigger than a page, fall back to `vmalloc()`, which can satisfy far larger requests by stitching together non-contiguous pages.
+`single_open()` とその仲間は、`seq_file` に、出力全体を1つのバッファで生成する機会をちょうど1回だけ与える — 段階的な分割はない。出力が収まらないと、`fs/seq_file.c` はバッファを2倍にして再試行する。元々これは `kmalloc()` を意味しており、メモリ断片化のもとでは、満たしにくい大きな割り当ては単純に失敗していた — これは実際の問題だった。[`058504edd026`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=058504edd02667eef8fac9be27ab3ea74332e9b4)（"fs/seq_file: fallback to vmalloc allocation"、Heiko Carstens、2014年7月）は、断片化したシステムで実際に起きていた `/proc/stat` の読み出し失敗を、フォールバックを追加することで修正した。`kmalloc()` が失敗し、要求が1 page より大きければ `vmalloc()` にフォールバックする。`vmalloc()` は非連続な page をつなぎ合わせることで、はるかに大きな要求を満たせる。
 
 ```c
 static void *seq_buf_alloc(unsigned long size)
@@ -41,33 +41,33 @@ static void *seq_buf_alloc(unsigned long size)
 }
 ```
 
-That one change is what made a multi-gigabyte `seq_file` buffer *possible* to allocate at all. Nothing else in the doubling logic changed to account for it.
+この1つの変更こそが、数ギガバイトの `seq_file` バッファの割り当てをそもそも*可能*にしたものである。倍増のロジックの他の部分は、それを考慮して変更されることはなかった。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-`m->size`, the buffer size that doubles on each retry, is a `size_t` — 64-bit on any modern kernel. Reading `/proc/self/mountinfo` (`show_mountinfo()` → `seq_dentry()`) passes that size straight into `dentry_path()`:
+再試行のたびに倍増するバッファサイズ `m->size` は `size_t` であり、現代のどのカーネルでも64ビットである。`/proc/self/mountinfo` の読み出し（`show_mountinfo()` → `seq_dentry()`）は、そのサイズをそのまま `dentry_path()` に渡す。
 
 ```c
 char *dentry_path(struct dentry *dentry, char *buf, int buflen)
 ```
 
-`buflen` is a plain 32-bit signed `int`. Once `m->size` reaches exactly 2 GiB, the implicit narrowing conversion at the call site produces `INT_MIN` — `-2147483648` — not an error, not a clamp, just a silently reinterpreted negative number.
+`buflen` は普通の32ビット符号付き `int` である。`m->size` がちょうど 2 GiB に達すると、呼び出し箇所での暗黙の縮小変換は `INT_MIN` — `-2147483648` — を生む。エラーでもクランプでもなく、黙って再解釈された負の数である。
 
-Qualys's advisory traces the rest precisely: `dentry_path()`, on an unlinked dentry, computes `p = buf + buflen` — with `buflen` now `INT_MIN`, `p` points roughly 2 GiB *before* the start of the vmalloc'd buffer — and calls `prepend(&p, &buflen, "//deleted", 10)` to write that literal suffix. `prepend()` decrements the (still-negative, now-interpreted-as-huge-positive-after-arithmetic) `buflen` and the pointer, and writes.
+Qualys のアドバイザリは残りを正確にたどっている。`dentry_path()` は、unlink された dentry に対して `p = buf + buflen` を計算する — `buflen` が今や `INT_MIN` なので、`p` は vmalloc されたバッファの先頭のおよそ 2 GiB *手前*を指す — そして `prepend(&p, &buflen, "//deleted", 10)` を呼んでそのリテラルの接尾辞を書き込む。`prepend()` は（まだ負の、演算後には巨大な正の値として解釈される）`buflen` とポインタをデクリメントし、書き込む。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The write is small — 10 bytes, the literal string `"//deleted"` — but it lands at an attacker-chosen offset with no bounds check at all: "exactly -2GB-10B below the beginning of a vmalloc()ated kernel buffer," in Qualys's own words. Reaching the 2 GiB threshold takes a real but achievable setup: create a deeply nested directory tree whose total path length exceeds 1 GiB, bind-mount it inside an unprivileged user namespace, then `rmdir()` it so the dentries become unlinked (triggering the `"//deleted"` suffix path) while something is still reading `mountinfo` for that mount. Because `seq_file`'s own path-component escaping turns each `\` into a 4-byte `\134` sequence, an attacker who pads directory names with backslashes gets a 4x length amplification — Qualys found the practical directory count came to roughly 1 million nested directories rather than the naive 4 million a flat 256-byte-`NAME_MAX` calculation would suggest — reachable with about 5 GB of memory and 1 million inodes.
+書き込みは小さい — 10バイト、リテラル文字列 `"//deleted"` — が、境界チェックがまったくないまま、攻撃者が選んだオフセットに着地する。Qualys 自身の言葉では、"exactly -2GB-10B below the beginning of a vmalloc()ated kernel buffer"（訳: vmalloc() で割り当てられたカーネルバッファの先頭からちょうど 2GB+10B 手前）である。2 GiB のしきい値に到達するには、現実的だが達成可能なセットアップが必要である。パスの全長が 1 GiB を超える深くネストしたディレクトリツリーを作り、それを非特権のユーザー namespace 内で bind マウントし、そのマウントの `mountinfo` を何かがまだ読んでいる間に、dentry が unlink されるように（`"//deleted"` 接尾辞のパスを起動するために）それを `rmdir()` する。`seq_file` 自身のパス要素のエスケープ処理は `\` をそれぞれ4バイトの `\134` シーケンスに変えるので、ディレクトリ名をバックスラッシュで埋める攻撃者は4倍の長さの増幅を得る — Qualys は、実際に必要なディレクトリ数が、`NAME_MAX` 256バイトでの単純な計算が示す400万ではなく、およそ100万個のネストしたディレクトリになることを見出した — これは約 5 GB のメモリと100万個の inode で到達可能である。
 
-From that single controlled 10-byte write, Qualys built a full local-root exploit: pin a thread mid-BPF-verification using `userfaultfd()` or FUSE to stall it after the verifier has approved a small eBPF program but before JIT compilation, use the OOB write's timing to corrupt kernel state, and swap in different bytecode than what was verified — arbitrary kernel read/write, then overwriting `modprobe_path[]` for root-equivalent code execution. They confirmed the full chain worked, unmodified, on default installs of Ubuntu 20.04, 20.10, and 21.04, Debian 11, and Fedora 34 Workstation, and assessed other distributions as "certainly vulnerable, and probably exploitable."
+その制御された1回の10バイト書き込みから、Qualys は完全なローカル root エクスプロイトを構築した。`userfaultfd()` または FUSE を使って、BPF 検証の途中のスレッドを、検証器が小さな eBPF プログラムを承認した後かつ JIT コンパイルの前で停止させ、範囲外書き込みのタイミングを使ってカーネルの状態を破壊し、検証されたものとは異なるバイトコードに差し替える — 任意のカーネル読み書きを得て、次に `modprobe_path[]` を上書きして root 相当のコード実行を得る。彼らは、この完全なチェーンが Ubuntu 20.04、20.10、21.04、Debian 11、Fedora 34 Workstation のデフォルトインストールで無修正のまま動作することを確認し、他のディストリビューションについては "certainly vulnerable, and probably exploitable"（訳: 確実に脆弱で、おそらく悪用可能）と評価した。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The vulnerable narrowing conversion — a 64-bit size flowing into a 32-bit signed parameter — was there from the moment `dentry_path()`'s signature was written; it simply couldn't be triggered, because nothing could grow `m->size` past a few kilobytes before `vmalloc()` support existed. Adding the vmalloc fallback in 2014 was a correct, narrowly-scoped fix for a real allocation-failure bug — its author had no reason to audit every downstream consumer of `seq_file` buffer sizes for `int`-width assumptions, and the truncation sat unreachable-in-practice for seven years until someone specifically went looking for exactly this class of bug across the tree.
+脆弱な縮小変換 — 64ビットのサイズが32ビット符号付きのパラメータに流れ込む — は、`dentry_path()` のシグネチャが書かれた瞬間から存在していた。単に起動できなかっただけである。`vmalloc()` のサポートが存在する前は、`m->size` を数キロバイトより先に育てられるものが何もなかったからである。2014年に vmalloc フォールバックを追加したことは、実在する割り当て失敗のバグに対する、正しく範囲を絞った修正だった — その作者には、`seq_file` のバッファサイズのすべての下流の利用者について `int` 幅の仮定を監査する理由はなかった。そして切り詰めは、誰かがまさにこのクラスのバグをツリー全体で特に探しに行くまで、7年間実質的に到達不能なまま眠っていた。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-Eric Sandeen's fix, suggested by Al Viro after Qualys's report, is three lines:
+Qualys の報告を受けて Al Viro が提案し、Eric Sandeen が書いた修正は3行である。
 
 ```c
 static void *seq_buf_alloc(unsigned long size)
@@ -79,27 +79,27 @@ static void *seq_buf_alloc(unsigned long size)
 }
 ```
 
-`MAX_RW_COUNT` is `INT_MAX` rounded down to a page boundary — just under 2 GiB — an existing kernel-wide constant already used to cap ordinary read/write sizes for exactly this class of int-overflow hazard. The fix doesn't touch `dentry_path()`'s signature or fix the narrowing conversion itself; it simply refuses to let a `seq_file` buffer grow large enough to trigger it. LWN's coverage called it "something of a band-aid to simply reject seq_buf allocations that get 'too large,'" and asked "how many other size_t-to-int problems of that sort still linger in the kernel."
+`MAX_RW_COUNT` は `INT_MAX` を page 境界に切り捨てた値 — 2 GiB をわずかに下回る — であり、まさにこのクラスの int オーバーフローの危険に備えて、通常の read/write のサイズを制限するためにすでに使われている、カーネル全体の既存の定数である。修正は `dentry_path()` のシグネチャには触れず、縮小変換そのものも直さない。単に、それを起動できるほど大きく `seq_file` のバッファが育つことを拒否するだけである。LWN の記事はこれを "something of a band-aid to simply reject seq_buf allocations that get 'too large,'"（訳: 「大きすぎる」seq_buf の割り当てを単に拒否するのは、いささか応急処置的である）と評し、"how many other size_t-to-int problems of that sort still linger in the kernel."（訳: その種の size_t から int への問題が、カーネルにほかにいくつ残っているのか）と問いかけた。
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**A correct, well-scoped fix can quietly reopen a dormant bug class years later**, if the fix removes a limit (here, the hard failure of `kmalloc()` on huge requests) that had been incidentally shielding an unrelated latent bug (the `int` truncation in `dentry_path()`). The 2014 patch was never wrong about what it set out to do.
+**正しく、範囲を適切に絞った修正が、何年も後に眠っていたバグクラスをひっそりと再び開くことがある**。その修正が、無関係な潜在バグ（`dentry_path()` における `int` の切り詰め）をたまたま覆い隠していた制限（ここでは、巨大な要求に対する `kmalloc()` の確実な失敗）を取り除く場合である。2014年のパッチは、それがやろうとしたことについて間違っていたことは一度もない。
 
-**`size_t`-to-`int` narrowing is a recurring, name-brand bug class precisely because it's silent** — no compiler warning by default, no crash at the conversion site, just a value that becomes meaningfully wrong only once a caller manages to push it past 2^31. Any code path where an attacker can influence a size that eventually crosses a 32-bit signed boundary is worth this exact scrutiny.
+**`size_t` から `int` への縮小は、まさに静かであるがゆえに、繰り返し現れる有名なバグクラスである** — デフォルトではコンパイラの警告もなく、変換箇所でのクラッシュもなく、呼び出し側が 2^31 を超えて押し上げることに成功して初めて意味のある誤りとなる値があるだけである。攻撃者が、最終的に32ビット符号付きの境界を越えるサイズに影響を与えられるコードパスは、どれもまさにこの精査に値する。
 
-!!! warning "Pattern to watch for"
-    Grep for size/length parameters declared `int` (not `size_t`, `ssize_t`, or `unsigned long`) anywhere they're fed from a caller-influenced, unboundedly-growing value — buffer doubling logic, cumulative counters, anything that "just keeps growing" is exactly the shape that turns a silent narrowing conversion into an exact, attacker-controlled out-of-bounds offset once it crosses `INT_MAX`.
+!!! warning "注意すべきパターン"
+    呼び出し側が影響を与えられ、際限なく増える値が渡されるあらゆる場所で、（`size_t`、`ssize_t`、`unsigned long` ではなく）`int` として宣言されたサイズ/長さのパラメータを grep すること — バッファの倍増ロジック、累積カウンタ、「ひたすら増え続ける」ものはどれも、`INT_MAX` を越えた途端に、静かな縮小変換を攻撃者が制御する正確な範囲外オフセットに変える、まさにその形をしている。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [VFS Overview](../README.md) — the generic `seq_file` interface this bug lives in
-- [Understanding /proc](../../mm/understanding-proc-meminfo.md) — the `/proc` infrastructure `seq_file` backs
-- [Dirty Pipe](../../security/war-stories/dirty-pipe.md) — another local-root bug from a small, silent omission with a multi-year dormancy window
+- [VFS の概要](../README.md) — このバグが存在する汎用の `seq_file` インターフェイス
+- [/proc を理解する](../../mm/understanding-proc-meminfo.md) — `seq_file` が支える `/proc` の基盤
+- [Dirty Pipe](../../security/war-stories/dirty-pipe.md) — 小さく静かな見落としから生じ、何年も休眠していた、もう1つのローカル root バグ
 
-## External references {#external-references}
+## 外部参考文献 {#external-references}
 
-- [git.kernel.org: 8cae8cd89f05](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8cae8cd89f05f6de223d63e6d15e31c8ba9cf53b) — "seq_file: disallow extremely large seq buffer allocations," the fix
-- [git.kernel.org: 058504edd026](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=058504edd02667eef8fac9be27ab3ea74332e9b4) — "fs/seq_file: fallback to vmalloc allocation," the commit that made the bug reachable
-- [oss-security: CVE-2021-33909](https://www.openwall.com/lists/oss-security/2021/07/20/1) — Qualys's original advisory, with the full exploitation mechanics
-- [LWN: The Sequoia seq_file vulnerability](https://lwn.net/Articles/863729/) — Jake Edge, July 21, 2021
-- [NVD: CVE-2021-33909](https://nvd.nist.gov/vuln/detail/CVE-2021-33909) — CVE record, CVSS 7.8 HIGH, published July 20, 2021
+- [git.kernel.org: 8cae8cd89f05](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8cae8cd89f05f6de223d63e6d15e31c8ba9cf53b) — "seq_file: disallow extremely large seq buffer allocations"、修正
+- [git.kernel.org: 058504edd026](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=058504edd02667eef8fac9be27ab3ea74332e9b4) — "fs/seq_file: fallback to vmalloc allocation"、バグを到達可能にしたコミット
+- [oss-security: CVE-2021-33909](https://www.openwall.com/lists/oss-security/2021/07/20/1) — Qualys の元のアドバイザリ。悪用の仕組みの全容を含む
+- [LWN: The Sequoia seq_file vulnerability](https://lwn.net/Articles/863729/) — Jake Edge、2021年7月21日
+- [NVD: CVE-2021-33909](https://nvd.nist.gov/vuln/detail/CVE-2021-33909) — CVE レコード。CVSS 7.8 HIGH、2021年7月20日公開

@@ -1,48 +1,48 @@
-# The uevent_show() Fix That Deadlocked Driver Detach {#the-uevent_show-fix-that-deadlocked-driver-detach}
+# ドライバのデタッチをデッドロックさせたuevent_show()の修正 {#the-uevent_show-fix-that-deadlocked-driver-detach}
 
-> CVE-2024-44952 (rejected) — a 2024 fix for a real `dev->driver` NULL-pointer race added `device_lock()` to a sysfs read path, recreating a deadlock that lockdep couldn't see because `device_lock()` deliberately opts out of its cycle detector, and only a subsystem with its own local lockdep key for the device mutex ever caught it
+> CVE-2024-44952（却下）— 本物の`dev->driver` NULLポインタ競合に対する2024年の修正は、sysfsの読み取りパスに`device_lock()`を追加し、デッドロックを再び生み出した。`device_lock()`はlockdepのサイクル検出器から意図的に除外されているためlockdepにはそれが見えず、デバイスのmutexに独自のローカルlockdepキーを持つサブシステムだけがそれを捕捉できた
 
-Disclosed
-:   September 4, 2024 (CVE-2024-44952 published by the "Linux" CNA; later rejected — see below)
+公開
+:   2024年9月4日（"Linux" CNAがCVE-2024-44952を公開。後に却下された。後述）
 
-Reported by
-:   syzbot (fuzzer-found); root-caused by Tetsuo Handa
+報告者
+:   syzbot（ファザーによる発見）。根本原因の特定はTetsuo Handa
 
 CVSS
-:   5.5 MEDIUM (CVSS 3.1, `AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H` — an NVD-computed score, briefly visible before rejection; not present in the current NVD record)
+:   5.5 MEDIUM（CVSS 3.1、`AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H`。却下前に短期間表示されていたNVD算出のスコアで、現在のNVDレコードには存在しない）
 
-Bug present since
-:   commit `c0a40097f0bc`, May–June 2024, first shipped in Linux 6.10
+バグの混入時期
+:   コミット`c0a40097f0bc`、2024年5〜6月、Linux 6.10で初めて出荷
 
-Fixed in
-:   commit `15fffc6a5624`, July 2024, first shipped in Linux 6.11
+修正バージョン
+:   コミット`15fffc6a5624`、2024年7月、Linux 6.11で初めて出荷
 
-CVE status
-:   Rejected by the assigning "Linux" CNA on November 9, 2024 — the rejection record gives only boilerplate ("withdrawn by its CVE Numbering Authority"), no bug-specific rationale
+CVEのステータス
+:   割り当てた"Linux" CNAによって2024年11月9日に却下された。却下レコードには定型文（"withdrawn by its CVE Numbering Authority"）しかなく、バグ固有の理由は示されていない
 
-Exploit tool
-:   none; the impact is a kernel deadlock (denial of service), not memory corruption or code execution
+エクスプロイトツール
+:   なし。影響はカーネルのデッドロック（サービス拒否）であり、メモリ破壊やコード実行ではない
 
-Actively exploited
-:   no confirmed cases (not on CISA KEV)
+実際の悪用
+:   確認された事例なし（CISA KEVに未掲載）
 
-*Part of [War Stories: Device Drivers](../war-stories.md).*
+*[事件簿: デバイスドライバ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 発生前の状態 {#before-state}
 
-`device_lock()` — a wrapper around `dev->mutex` — protects a device's core state, including the `dev->driver` pointer that records which driver (if any) currently owns the device. It's acquired in many different orderings across the driver core, sysfs, and individual bus/subsystem code, and by the kernel's own admission it is not amenable to lockdep's ordinary cycle detection: `dev->mutex` is initialized with `lockdep_set_novalidate_class()`, which tells lockdep to skip its usual acquisition-order bookkeeping for this lock entirely. Most `device_lock()`-related lock-ordering problems are therefore invisible to lockdep by design — unless a subsystem allocates its own explicit local lockdep key for a specific device's mutex, opting that one device class back into validation. CXL's ACPI driver code does exactly that for the platform device it binds to (`device_lock_set_class(&pdev->dev, &cxl_root_key)` in `drivers/cxl/acpi.c`), which is the only reason the deadlock in this story ever produced a lockdep splat instead of an unexplained hang.
+`device_lock()`は`dev->mutex`のラッパーで、デバイスのコア状態を保護する。その中には、どのドライバが（もしあれば）現在デバイスを所有しているかを記録する`dev->driver`ポインタも含まれる。このロックはドライバコア、sysfs、個々のバス/サブシステムのコードにわたってさまざまな順序で取得され、カーネル自身が認めているように、lockdepの通常のサイクル検出にはなじまない。`dev->mutex`は`lockdep_set_novalidate_class()`で初期化されており、これはlockdepに対し、このロックについては通常の取得順序の記録を完全にスキップするよう指示する。したがって、`device_lock()`に関連するロック順序の問題のほとんどは、設計上lockdepからは見えない。ただし、サブシステムが特定のデバイスのmutexに独自の明示的なローカルlockdepキーを割り当て、そのデバイスクラスだけを検証対象に戻す場合は別である。CXLのACPIドライバのコードは、バインドするプラットフォームデバイスに対してまさにそれを行っている（`drivers/cxl/acpi.c`の`device_lock_set_class(&pdev->dev, &cxl_root_key)`）。この話のデッドロックが原因不明のハングではなくlockdepのスプラットを生み出した唯一の理由はそれである。
 
-`uevent_show()` is the sysfs read handler backing a device's `uevent` attribute; it calls into `dev_uevent()`, which builds the same key=value environment (`DEVPATH=`, `DEVTYPE=`, and so on) sent to userspace over the kernel's uevent netlink socket, including `DRIVER=%s` sourced from `dev->driver->name` when a driver is bound. `dev->driver` itself is written in two places that matter here: `really_probe()` sets it when a probe succeeds and clears it back to `NULL` via `device_unbind_cleanup()` when a probe fails, and `device_release_driver_internal()` clears it on ordinary driver detach — both under `device_lock()`.
+`uevent_show()`はデバイスの`uevent`属性を支えるsysfsの読み取りハンドラである。これは`dev_uevent()`を呼び出し、カーネルのuevent netlinkソケットを通じてユーザー空間に送られるのと同じkey=value形式の環境（`DEVPATH=`、`DEVTYPE=`など）を構築する。その中には、ドライバがバインドされている場合に`dev->driver->name`から取られる`DRIVER=%s`も含まれる。`dev->driver`自体は、ここで重要な2か所で書き込まれる。`really_probe()`はprobeが成功したときにそれを設定し、probeが失敗したときには`device_unbind_cleanup()`を介して`NULL`に戻す。そして`device_release_driver_internal()`は通常のドライバのデタッチ時にそれをクリアする。どちらも`device_lock()`の下で行われる。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Reading `dev->driver` without holding `device_lock()` was a real, live bug: `dev_uevent()` checked `if (dev->driver)` and then dereferenced `dev->driver->name` with no synchronization, so a concurrent failed-probe cleanup on another CPU could clear `dev->driver` to `NULL` between the check and the dereference. `c0a40097f0bc` ("drivers: core: synchronize really_probe() and dev_uevent()", Dirk Behme, May 2024) fixed this the direct way: wrap the call into `dev_uevent()` from `uevent_show()` with `device_lock()`/`device_unlock()`, matching the lock `really_probe()` already held around its own writes. The commit message notes this exact class of race had been reported once before, in 2015, and never fixed then. It also references an open syzbot report for a related-looking NULL dereference on the *initialization* side (`dev->driver = drv`, which only ever transitions `NULL` → non-`NULL`) and says that report "can be considered to be false-positives" but should be incidentally fixed by the same change.
+`device_lock()`を保持せずに`dev->driver`を読むことは、本物の、現に存在するバグだった。`dev_uevent()`は`if (dev->driver)`をチェックしてから、同期なしに`dev->driver->name`を参照していたため、別のCPU上で並行して行われる失敗したprobeのクリーンアップが、チェックと参照の間に`dev->driver`を`NULL`にクリアしうる。`c0a40097f0bc`（"drivers: core: synchronize really_probe() and dev_uevent()"、Dirk Behme、2024年5月）は、これを直接的な方法で修正した。`uevent_show()`から`dev_uevent()`への呼び出しを`device_lock()`/`device_unlock()`で囲み、`really_probe()`が自身の書き込みの周りですでに保持していたロックに合わせたのである。コミットメッセージは、まさにこのクラスの競合が2015年に一度報告され、そのときは修正されなかったことに触れている。また、*初期化*側（`dev->driver = drv`。これは`NULL`から非`NULL`への遷移しかしない）での関連していそうなNULL参照についての未解決のsyzbotレポートにも言及し、そのレポートは"can be considered to be false-positives"（偽陽性とみなせる）が、同じ変更によって付随的に修正されるはずだと述べている。
 
-What the commit message does not mention, and apparently nobody checking it caught, is that `device_lock()` was already being taken in `uevent_show()`'s call stack from the *other* direction: driver removal. `device_release_driver_internal()` — called via `driver_detach()` when a module is unloaded — holds `device_lock()` across a call to `device_del()`, which in turn calls `kernfs_remove_by_name_ns()` to delete the device's sysfs entries, including its own `uevent` attribute file. Deleting a kernfs node has to wait for any in-flight read of that node to finish; an in-flight read of the `uevent` attribute is exactly `uevent_show()` — now itself waiting to acquire the very `device_lock()` that driver detach is holding while it waits for that read to complete.
+コミットメッセージが触れておらず、どうやらそれを確認した誰も気づかなかったのは、`device_lock()`が`uevent_show()`の呼び出しスタックの中で*もう一方*の方向、すなわちドライバの削除からすでに取得されていたことである。`device_release_driver_internal()`は（モジュールのアンロード時に`driver_detach()`経由で呼ばれる）、`device_del()`の呼び出しをまたいで`device_lock()`を保持しており、`device_del()`は`kernfs_remove_by_name_ns()`を呼び出してデバイスのsysfsエントリを削除する。その中にはデバイス自身の`uevent`属性ファイルも含まれる。kernfsノードの削除は、そのノードに対する実行中の読み取りが終わるのを待たなければならない。`uevent`属性に対する実行中の読み取りとはまさに`uevent_show()`のことであり、それは今や、ドライバのデタッチがその読み取りの完了を待ちながら保持している、まさにその`device_lock()`の取得を待っているのである。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The result is a classic AB-BA deadlock between a device's `device_lock()` and kernfs's internal per-node `kn->active` reference count, caught via a CXL hardware reproducer and a lockdep splat (`Tainted: G OE N`, kernel `6.10.0-rc7+`):
+結果は、デバイスの`device_lock()`とkernfs内部のノードごとの`kn->active`参照カウントとの間の典型的なAB-BAデッドロックであり、CXLハードウェアでの再現とlockdepのスプラット（`Tainted: G OE N`、カーネル`6.10.0-rc7+`）によって捕捉された。
 
 ```
 ======================================================
@@ -89,15 +89,15 @@ the existing dependency chain (in reverse order) is:
        entry_SYSCALL_64_after_hwframe+0x76/0x7e
 ```
 
-`cxl_root_key` is a local lockdep key CXL assigns to its root device's mutex specifically so lockdep can reason about it — an opt-in that most of the driver core doesn't take, because `dev->mutex` carries `lockdep_set_novalidate_class()` precisely on account of how inconsistently `device_lock()` is ordered against other locks across the tree. Without that local key, this exact deadlock shape would have been just as real on any other device class, silently absent from lockdep's dependency graph, and reproducible only as an unexplained hang under `rmmod`.
+`cxl_root_key`は、CXLがlockdepに推論させるためだけにルートデバイスのmutexに割り当てるローカルlockdepキーである。これはドライバコアのほとんどが選択しないオプトインである。というのも、`dev->mutex`は、ツリー全体で`device_lock()`が他のロックに対してどれほど一貫性なく順序付けられているかという理由から、まさに`lockdep_set_novalidate_class()`を持っているからである。そのローカルキーがなければ、まったく同じ形のデッドロックは他のどのデバイスクラスでも同じように現実のものでありながら、lockdepの依存関係グラフからは黙って欠落し、`rmmod`の下での原因不明のハングとしてしか再現できなかっただろう。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-Two independently reasonable fixes collided. `really_probe()` already held `device_lock()` when it wrote `dev->driver`; adding `device_lock()` to the one unsynchronized reader was the natural, narrowly-scoped fix for a real NULL-pointer race, and it's the kind of change a reviewer checking "does this fix the race being described" would approve without needing to re-derive every other caller already holding that lock elsewhere in the call stack. `device_release_driver_internal()`'s use of `device_lock()` across `device_del()` long predates this change and is unrelated in purpose — driver detach needs the lock to keep the device's driver-binding state consistent while it tears the device down. Neither commit's author was wrong about their own fix in isolation; the deadlock lives entirely in the interaction between the two, mediated by kernfs's own internal wait-for-readers logic during node removal — a dependency `device_lock()`'s novalidate status meant nobody could rely on lockdep to surface automatically.
+独立にはそれぞれ妥当な2つの修正が衝突した。`really_probe()`は`dev->driver`を書き込むときにすでに`device_lock()`を保持していた。唯一の同期されていない読み手に`device_lock()`を追加するのは、本物のNULLポインタ競合に対する自然で範囲の狭い修正であり、「これは説明されている競合を修正するか」を確認するレビュアーが、呼び出しスタックの他の場所ですでにそのロックを保持している他のすべての呼び出し元を導き直す必要なく承認するような種類の変更である。`device_release_driver_internal()`が`device_del()`をまたいで`device_lock()`を使っているのは、この変更よりずっと前からのことで、目的も無関係である。ドライバのデタッチは、デバイスを解体する間、デバイスのドライババインディング状態の一貫性を保つためにこのロックを必要とする。どちらのコミットの作者も、それ単体で見れば自分の修正について間違ってはいなかった。デッドロックは完全に両者の相互作用の中に存在しており、それはノード削除時のkernfs自身の内部的な読み手待ちロジックによって媒介される。これは、`device_lock()`がnovalidateであるせいで、誰もlockdepが自動的に浮かび上がらせてくれることを当てにできない依存関係だった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`15fffc6a5624` ("driver core: Fix uevent_show() vs driver detach race", Dan Williams, July 2024) removes `device_lock()`/`device_unlock()` from `uevent_show()` entirely and replaces the locked read with an RCU-protected one. `dev_uevent()` now reads the driver pointer under `rcu_read_lock()` with `READ_ONCE()`:
+`15fffc6a5624`（"driver core: Fix uevent_show() vs driver detach race"、Dan Williams、2024年7月）は、`uevent_show()`から`device_lock()`/`device_unlock()`を完全に取り除き、ロック付きの読み取りをRCUで保護された読み取りに置き換える。`dev_uevent()`は今では`rcu_read_lock()`の下で`READ_ONCE()`を使ってドライバポインタを読む。
 
 ```c
  static int dev_uevent(const struct kobject *kobj, struct kobj_uevent_env *env)
@@ -108,7 +108,7 @@ Two independently reasonable fixes collided. `really_probe()` already held `devi
  	...
 -	if (dev->driver)
 -		add_uevent_var(env, "DRIVER=%s", dev->driver->name);
-+	/* Synchronize with module_remove_driver() */
++	/* module_remove_driver() と同期する */
 +	rcu_read_lock();
 +	driver = READ_ONCE(dev->driver);
 +	if (driver)
@@ -116,7 +116,7 @@ Two independently reasonable fixes collided. `really_probe()` already held `devi
 +	rcu_read_unlock();
 ```
 
-and `uevent_show()` drops the `device_lock()`/`device_unlock()` pair around the call entirely. The write side gets a matching `synchronize_rcu()` in `module_remove_driver()`, which runs during driver/module teardown, ensuring any in-flight RCU-protected reader of `dev->driver` has finished before the driver object itself can go away:
+そして`uevent_show()`は、呼び出しの周りの`device_lock()`/`device_unlock()`のペアを完全に取り除く。書き込み側には、ドライバ/モジュールの解体時に実行される`module_remove_driver()`に対応する`synchronize_rcu()`が追加され、ドライバオブジェクト自体が消える前に、`dev->driver`に対する実行中のRCU保護された読み手がすべて終了していることを保証する。
 
 ```c
  void module_remove_driver(const struct device_driver *drv)
@@ -124,33 +124,33 @@ and `uevent_show()` drops the `device_lock()`/`device_unlock()` pair around the 
  	if (!drv)
  		return;
  
-+	/* Synchronize with dev_uevent() */
++	/* dev_uevent() と同期する */
 +	synchronize_rcu();
 +
  	sysfs_remove_link(&drv->p->kobj, "module");
 ```
 
-This preserves the original fix's goal — no reader can observe a torn or freed `dev->driver` — without ever taking `device_lock()` from the sysfs read path, so the AB-BA ordering against driver detach's kernfs removal simply no longer exists. The commit's own rationale is pragmatic about the cost: driver objects are long-lived and unregistered rarely, so paying `synchronize_rcu()`'s latency once per module removal is an acceptable trade for making an infrequent, narrow race safe without a lock.
+これにより、元の修正の目的（どの読み手も壊れた、あるいは解放された`dev->driver`を観測できない）を、sysfsの読み取りパスから`device_lock()`を一切取らずに維持できる。そのため、ドライバのデタッチのkernfs削除に対するAB-BAの順序付けは単純にもう存在しない。コミット自身の論拠は、そのコストについて現実的である。ドライバオブジェクトは長寿命でめったに登録解除されないので、モジュールの削除1回ごとに`synchronize_rcu()`のレイテンシを払うことは、まれで範囲の狭い競合をロックなしで安全にするためのトレードオフとして許容できる、というものである。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A lock that's exempted from lockdep validation doesn't stop being capable of deadlocking — it stops being able to tell you about it.** `device_lock()`'s `lockdep_set_novalidate_class()` exists because the lock is used too inconsistently across the driver core for generic cycle detection to avoid false positives, but that tradeoff means a real new deadlock introduced anywhere in that inconsistent usage is invisible by default. This one only surfaced because CXL's driver code had independently opted its own device class back into validation with a local lockdep key — most of the driver core carries no such key, and the same defect shape elsewhere would present only as an unexplained hang.
+**lockdepの検証から除外されたロックは、デッドロックしうることをやめるわけではない。それについて教えてくれることをやめるのである。** `device_lock()`の`lockdep_set_novalidate_class()`が存在するのは、このロックがドライバコア全体であまりに一貫性なく使われているため、汎用的なサイクル検出では偽陽性を避けられないからだが、そのトレードオフは、その一貫性のない使い方のどこかで新たに持ち込まれた本物のデッドロックがデフォルトでは見えないことを意味する。今回のものが表面化したのは、CXLのドライバコードが独自にローカルlockdepキーで自分のデバイスクラスを検証対象に戻していたからにすぎない。ドライバコアのほとんどはそのようなキーを持たず、他の場所で同じ形の欠陥があっても、原因不明のハングとしてしか現れないだろう。
 
-**Fixing a race by adding a lock is only safe if you know everything else that already holds that lock in the surrounding call graph.** The 2024 NULL-pointer fix was correct about the race it targeted and wrong about being lock-free-safe to apply, because `device_lock()` was already load-bearing on a completely different call path — driver detach — that the fix's author had no obvious reason to go looking for.
+**ロックを追加して競合を修正することが安全なのは、周囲のコールグラフの中ですでにそのロックを保持している他のすべてのものを知っている場合に限られる。** 2024年のNULLポインタ修正は、対象とした競合については正しかったが、ロックを追加しても安全だという点では誤っていた。`device_lock()`は、修正の作者がわざわざ探しに行く明白な理由のない、まったく別のコールパス（ドライバのデタッチ）ですでに重要な役割を担っていたからである。
 
-!!! warning "Pattern to watch for"
-    Before adding a lock acquisition to fix a data race, check not just what already holds that lock on the path you're fixing, but what *else*, elsewhere in the codebase, holds it across a call into code your new acquisition might now be reached from — especially for a lock like `device_lock()` that's deliberately exempted from automated cycle detection. A local lockdep key scoped to just your own subsystem is one way to get real signal on a lock the driver core itself can't validate for you.
+!!! warning "注意すべきパターン"
+    データ競合を修正するためにロックの取得を追加する前に、修正しようとしているパス上ですでにそのロックを保持しているものだけでなく、コードベースの他の場所で、新しい取得箇所に到達しうるコードへの呼び出しをまたいでそのロックを保持している*他の*ものも確認すること。特に`device_lock()`のように、自動的なサイクル検出から意図的に除外されているロックではそうである。自分のサブシステムだけにスコープを限定したローカルlockdepキーは、ドライバコア自体が検証してくれないロックについて本物のシグナルを得るための一つの方法である。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Linux Device Model](../device-model.md) — `struct device`, `device_lock()`, and the driver core's probe/detach machinery this bug lives in
-- [The kobject Path Race That Needed a Retry, Not a Lock](kobject-path-race.md) — a different driver-core race, also in a sysfs-adjacent path, fixed without adding a new lock
-- [The Deadlock Detector That Scheduled While Atomic](../../locking/war-stories/rtmutex-deadlock-detector-atomic-sleep.md) — a different subsystem's lock-discipline bug, and the mirror opposite of this one in visibility: that bug triggered a loud "scheduling while atomic" splat on any production kernel, where this one stayed invisible without a subsystem-local lockdep key
+- [Linuxデバイスモデル](../device-model.md) — `struct device`、`device_lock()`、そしてこのバグが存在するドライバコアのprobe/デタッチの仕組み
+- [ロックではなくリトライが必要だったkobjectパスの競合](kobject-path-race.md) — 同じくsysfsに隣接するパスにある別のドライバコアの競合で、新しいロックを追加せずに修正されたもの
+- [The Deadlock Detector That Scheduled While Atomic](../../locking/war-stories/rtmutex-deadlock-detector-atomic-sleep.md) — 別のサブシステムのロック規律のバグで、可視性の点ではこれとちょうど正反対のもの。あちらのバグはどの本番カーネルでも"scheduling while atomic"という派手なスプラットを引き起こしたが、こちらはサブシステムローカルのlockdepキーがなければ見えないままだった
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: c0a40097f0bc](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c0a40097f0bc81deafc15f9195d1fb54595cd6d0) — "drivers: core: synchronize really_probe() and dev_uevent()," the fix that introduced the deadlock while fixing a real NULL-pointer race
-- [git.kernel.org: 15fffc6a5624](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=15fffc6a5624b13b428bb1c6e9088e32a55eb82c) — "driver core: Fix uevent_show() vs driver detach race," the RCU-based fix, with the full lockdep splat in its commit message
-- [NVD: CVE-2024-44952](https://nvd.nist.gov/vuln/detail/CVE-2024-44952) — current record, showing rejected status
-- [Wayback Machine: NVD CVE-2024-44952, October 22, 2024](https://web.archive.org/web/20241022050517/https://nvd.nist.gov/vuln/detail/CVE-2024-44952) — archived snapshot showing the CVSS 3.1 5.5 MEDIUM score before rejection
-- [Kernel documentation: driver model overview](https://docs.kernel.org/driver-api/driver-model/overview.html) — `struct device` and `device_lock()`'s role in the driver core
+- [git.kernel.org: c0a40097f0bc](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c0a40097f0bc81deafc15f9195d1fb54595cd6d0) — "drivers: core: synchronize really_probe() and dev_uevent()"。本物のNULLポインタ競合を修正する過程でデッドロックを持ち込んだ修正
+- [git.kernel.org: 15fffc6a5624](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=15fffc6a5624b13b428bb1c6e9088e32a55eb82c) — "driver core: Fix uevent_show() vs driver detach race"。RCUベースの修正で、コミットメッセージにlockdepスプラットの全文を含む
+- [NVD: CVE-2024-44952](https://nvd.nist.gov/vuln/detail/CVE-2024-44952) — 却下ステータスを示す現在のレコード
+- [Wayback Machine: NVD CVE-2024-44952, October 22, 2024](https://web.archive.org/web/20241022050517/https://nvd.nist.gov/vuln/detail/CVE-2024-44952) — 却下前のCVSS 3.1 5.5 MEDIUMのスコアを示すアーカイブスナップショット
+- [カーネルドキュメント: driver model overview](https://docs.kernel.org/driver-api/driver-model/overview.html) — `struct device`と、ドライバコアにおける`device_lock()`の役割

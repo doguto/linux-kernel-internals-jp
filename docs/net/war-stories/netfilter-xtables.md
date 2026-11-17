@@ -1,29 +1,29 @@
-# Netfilter x_tables Heap Overflow {#netfilter-x_tables-heap-overflow}
+# Netfilter x_tablesのヒープオーバーフロー {#netfilter-x_tables-heap-overflow}
 
-> CVE-2021-22555 — a 15-year-old bounds-check gap in the iptables compat layer, sitting unactioned in syzbot's inbox for 8 months, became "Turning \x00\x00 into 10000$" and a Kubernetes pod escape
+> CVE-2021-22555 — iptablesのcompat層にあった15年前からの境界チェックの欠落は、syzbotの受信箱で8か月間手つかずのまま放置され、"Turning \x00\x00 into 10000$"となり、Kubernetesのpodエスケープとなった
 
-Disclosed
-:   July 2021 (fixed April 2021)
+公開
+:   2021年7月（修正は2021年4月）
 
-Reported by
-:   syzbot (August 2020, unanswered) and Andy Nguyen, Google (April 2021)
+報告者
+:   syzbot（2020年8月、返答なし）およびAndy Nguyen, Google（2021年4月）
 
 CVSS
-:   8.3 HIGH (Google's CNA score) / 7.8 HIGH (NVD primary)
+:   8.3 HIGH（GoogleのCNAスコア）/ 7.8 HIGH（NVDの一次評価）
 
-Bug present since
-:   2.6.19-rc1 (2006)
+バグの混入時期
+:   2.6.19-rc1（2006年）
 
-Actively exploited
-:   yes — added to CISA's KEV catalog in October 2025 (per [NVD](https://nvd.nist.gov/vuln/detail/CVE-2021-22555))
+実際の悪用
+:   あり — 2025年10月にCISAのKEVカタログに追加された（[NVD](https://nvd.nist.gov/vuln/detail/CVE-2021-22555)による）
 
-*Part of [War Stories: Network Stack Bugs and CVEs](../war-stories.md).*
+*[事件簿: ネットワークスタックのバグとCVE](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 発生前の状態 {#before-state}
 
-`iptables`/`ip6tables`/`arptables` rulesets are built by userspace and passed into the kernel via `setsockopt()`. On 64-bit kernels, 32-bit userspace tools (compat mode) submit rules in a **compat** layout that the kernel must translate into native 64-bit structures before use. This translation happens in `translate_compat_table()` (in each of `net/ipv4/netfilter/ip_tables.c`, `net/ipv6/netfilter/ip6_tables.c`, and `net/ipv4/netfilter/arp_tables.c`), which allocates a new buffer sized for the native layout and then calls `xt_compat_match_from_user()` / `xt_compat_target_from_user()` in `net/netfilter/x_tables.c` to copy and expand each match/target entry into it.
+`iptables`/`ip6tables`/`arptables`のルールセットはユーザー空間で構築され、`setsockopt()`を介してカーネルに渡される。64ビットカーネルでは、32ビットのユーザー空間ツール（compatモード）は**compat**レイアウトでルールを提出し、カーネルは使用前にそれをネイティブの64ビット構造体に変換しなければならない。この変換は`translate_compat_table()`（`net/ipv4/netfilter/ip_tables.c`、`net/ipv6/netfilter/ip6_tables.c`、`net/ipv4/netfilter/arp_tables.c`のそれぞれにある）で行われ、ネイティブレイアウト用のサイズの新しいバッファを割り当ててから、`net/netfilter/x_tables.c`の`xt_compat_match_from_user()` / `xt_compat_target_from_user()`を呼び出して、各match/targetエントリをそこにコピーして展開する。
 
-Native `xt_entry_match`/`xt_entry_target` structures are padded to an aligned size (`XT_ALIGN()`), but the compat versions the kernel receives from 32-bit userspace are not necessarily aligned the same way. The pre-fix code in `xt_compat_match_from_user()`/`xt_compat_target_from_user()` tried to zero just the padding gap for each individual entry:
+ネイティブの`xt_entry_match`/`xt_entry_target`構造体はアラインされたサイズ（`XT_ALIGN()`）にパディングされるが、カーネルが32ビットのユーザー空間から受け取るcompat版は必ずしも同じようにアラインされているわけではない。`xt_compat_match_from_user()`/`xt_compat_target_from_user()`の修正前のコードは、個々のエントリごとにパディングの隙間だけをゼロにしようとしていた。
 
 ```c
 pad = XT_ALIGN(match->matchsize) - match->matchsize;
@@ -31,79 +31,79 @@ if (pad > 0)
     memset(m->data + match->matchsize, 0, pad);
 ```
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-This per-entry padding zero used an offset (`m->data + match->matchsize`) computed independently for each match/target, without re-checking it against the actual size of the destination buffer allocated for the *whole* translated ruleset. By choosing targets whose `matchsize`/`targetsize` isn't 8-byte aligned ([Andy Nguyen's exploit writeup](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html) cites `NFLOG` as one such target, achievable via a controllable out-of-bounds offset reaching up to `0x4C` bytes past the buffer), a local process able to load such a compat ruleset could cause the `memset()` to write a small number of zero bytes **past the end of the allocated ruleset blob** — a heap out-of-bounds write.
+このエントリごとのパディングのゼロ埋めは、各match/targetごとに独立に計算されたオフセット（`m->data + match->matchsize`）を使っており、それを変換後のルールセット*全体*のために割り当てられた書き込み先バッファの実際のサイズと照合し直していなかった。`matchsize`/`targetsize`が8バイト境界にアラインされていないtargetを選ぶことで（[Andy Nguyenのエクスプロイト解説](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html)はそのようなtargetの一つとして`NFLOG`を挙げており、制御可能な範囲外オフセットによってバッファの最大`0x4C`バイト先まで到達できる）、そのようなcompatルールセットをロードできるローカルプロセスは、`memset()`に**割り当てられたルールセットのblobの末尾を越えて**少数のゼロバイトを書き込ませることができた。ヒープの範囲外書き込みである。
 
-Reaching this code path requires only being able to call `setsockopt(IPT_SO_SET_REPLACE)` (or the IPv6/ARP equivalents) from a 32-bit compat context, which requires `CAP_NET_ADMIN` — a capability routinely available to an unprivileged user inside a user *and* network namespace.
+このコードパスに到達するには、32ビットのcompatコンテキストから`setsockopt(IPT_SO_SET_REPLACE)`（またはIPv6/ARPの同等物）を呼び出せればよく、それには`CAP_NET_ADMIN`が必要である。これは、ユーザー名前空間*かつ*ネットワーク名前空間の中にいる非特権ユーザーが日常的に利用できるケーパビリティである。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The bug had existed since **2.6.19-rc1** (2006) — roughly fifteen years — reachable via `net/netfilter/x_tables.c`. It was reported to the kernel by [syzbot](https://syzkaller.appspot.com/bug?extid=cfc0247ac173f597aaaa) and independently by [Andy Nguyen](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html) (Google).
+このバグは**2.6.19-rc1**（2006年）から、およそ15年間存在しており、`net/netfilter/x_tables.c`を介して到達可能だった。カーネルには[syzbot](https://syzkaller.appspot.com/bug?extid=cfc0247ac173f597aaaa)と、独立に[Andy Nguyen](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html)（Google）によって報告された。
 
-Its severity came less from the bug itself (a write of a handful of zero bytes) than from what that primitive enabled. Andy Nguyen's public writeup, [`CVE-2021-22555: Turning \x00\x00 into 10000$`](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html), demonstrates using the four-zero-byte out-of-bounds write to corrupt an in-flight `msg_msg` object via heap spraying, build a use-after-free, leak kernel heap and code addresses, hijack a `pipe_buffer`'s function-pointer table, and ultimately execute a ROP chain that calls `commit_creds()` and switches namespaces — turning a tiny OOB write into full kernel code execution. Nguyen used the exploit to escape a Kubernetes pod's isolation in Google's kCTF cluster, as covered by LWN (["CVE-2021-22555: Turning \x00\x00 into 10000$", July 2021](https://lwn.net/Articles/862955/)).
+その深刻度は、バグ自体（ほんの数バイトのゼロの書き込み）よりも、そのプリミティブが可能にしたことに由来していた。Andy Nguyenの公開解説[`CVE-2021-22555: Turning \x00\x00 into 10000$`](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html)は、4バイトのゼロの範囲外書き込みを使い、ヒープスプレーによって使用中の`msg_msg`オブジェクトを破壊し、use-after-freeを構築し、カーネルのヒープとコードのアドレスをリークし、`pipe_buffer`の関数ポインタテーブルを乗っ取り、最終的に`commit_creds()`を呼んで名前空間を切り替えるROPチェーンを実行することを示している。小さなOOB書き込みを完全なカーネルコード実行に変えたのである。NguyenはこのエクスプロイトをGoogleのkCTFクラスタでKubernetesのpodの隔離から脱出するのに使った。これはLWNで取り上げられた（["CVE-2021-22555: Turning \x00\x00 into 10000$", July 2021](https://lwn.net/Articles/862955/)）。
 
-The impact wasn't limited to that 2021 demonstration. CISA added CVE-2021-22555 to its Known Exploited Vulnerabilities catalog in October 2025, confirmed via [NVD](https://nvd.nist.gov/vuln/detail/CVE-2021-22555) — over four years after the original fix — confirming it was observed under active exploitation against real targets long after patches were widely available, not just in a research kCTF cluster. Of the seven incidents on this page, it's the only one CISA has ever listed as actively exploited.
+影響はその2021年の実証にとどまらなかった。CISAは2025年10月にCVE-2021-22555をKnown Exploited Vulnerabilitiesカタログに追加しており、これは[NVD](https://nvd.nist.gov/vuln/detail/CVE-2021-22555)で確認できる。元の修正から4年以上後のことであり、研究用のkCTFクラスタだけでなく、パッチが広く利用可能になってからずっと後に、実際の標的に対する能動的な悪用が観測されたことを裏付けている。このページの7つのインシデントのうち、CISAが能動的に悪用されているとして掲載したことがあるのはこれだけである。
 
-syzbot's report actually predates Nguyen's by nearly eight months. On 17 August 2020 syzbot [emailed a KASAN slab-out-of-bounds report](https://lore.kernel.org/all/00000000000022934305ad166be3@google.com/) titled "KASAN: slab-out-of-bounds Write in xt_compat_target_from_user" directly to `netdev@`, `netfilter-devel@`, the netfilter core team address, David Miller, and Florian Westphal, with a full crash trace pinpointing `net/netfilter/x_tables.c:1129` and a ready-to-run C reproducer. Nobody replied.
+syzbotの報告は、実際にはNguyenの報告より8か月近く前にさかのぼる。2020年8月17日、syzbotは"KASAN: slab-out-of-bounds Write in xt_compat_target_from_user"という題の[KASAN slab-out-of-boundsレポートをメールで送った](https://lore.kernel.org/all/00000000000022934305ad166be3@google.com/)。宛先は`netdev@`、`netfilter-devel@`、netfilterコアチームのアドレス、David Miller、Florian Westphalで、`net/netfilter/x_tables.c:1129`を特定する完全なクラッシュトレースと、すぐに実行できるCの再現プログラムが付いていた。誰も返信しなかった。
 
-The [syzbot dashboard](https://syzkaller.appspot.com/bug?extid=cfc0247ac173f597aaaa) for that report shows zero human follow-up on the thread, and its own cause and fix bisections both failed — it sat as an open, unactioned bug until Westphal's April 2021 fix, prompted by Nguyen's independent, exploit-driven report through `security@kernel.org`, was manually linked to it: the shipped commit carries both `Reported-by: syzbot+cfc0247ac173f597aaaa@syzkaller.appspotmail.com` and `Reported-by: Andy Nguyen <theflow@google.com>`. The automated report had everything a maintainer would need to reproduce and fix the bug eight months earlier; what was missing wasn't detection but triage.
+そのレポートの[syzbotダッシュボード](https://syzkaller.appspot.com/bug?extid=cfc0247ac173f597aaaa)は、スレッド上で人間によるフォローアップがゼロであったことを示しており、原因と修正のbisectもともに失敗していた。それは、Nguyenが`security@kernel.org`を通じて独立に行ったエクスプロイト駆動の報告をきっかけとする2021年4月のWestphalの修正が手作業で紐付けられるまで、未対応のまま開いたバグとして放置されていた。出荷されたコミットには`Reported-by: syzbot+cfc0247ac173f597aaaa@syzkaller.appspotmail.com`と`Reported-by: Andy Nguyen <theflow@google.com>`の両方が付いている。自動レポートには、メンテナがバグを再現して修正するのに必要なものが8か月前の時点ですべて揃っていた。欠けていたのは検出ではなくトリアージだった。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The root cause is a **local, per-entry bounds check standing in for a missing global bounds check**: each match/target's padding write was "correct" in isolation (it wrote exactly `pad` bytes past that entry's data), but nothing validated that the cumulative effect of translating every entry in the ruleset stayed within the single buffer allocated up front. A fifteen-year-old assumption — that compat-mode entry sizes would always sum to no more than the native allocation — turned out to be false for certain target types.
+根本原因は、**欠けているグローバルな境界チェックの代わりを、ローカルなエントリごとの境界チェックが務めていた**ことである。各match/targetのパディング書き込みは、それ単体では「正しかった」（そのエントリのデータの先にちょうど`pad`バイトを書き込んでいた）が、ルールセット内のすべてのエントリを変換した累積的な結果が、最初に割り当てた単一のバッファ内に収まることを検証するものは何もなかった。15年前からの前提（compatモードのエントリサイズの合計がネイティブの割り当てを超えることはない）は、特定のtargetの種類では誤りであることが判明した。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-[`b29c457a6511`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b29c457a6511435960115c0f548c4360d5f4801d) ("netfilter: x_tables: fix compat match/target pad out-of-bound write") removes the per-entry padding `memset()` entirely and instead **zeroes the whole destination buffer up front**, before any entries are translated into it:
+[`b29c457a6511`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b29c457a6511435960115c0f548c4360d5f4801d)（"netfilter: x_tables: fix compat match/target pad out-of-bound write"）は、エントリごとのパディングの`memset()`を完全に取り除き、代わりにエントリが変換されて入る前に、**書き込み先バッファ全体を最初にゼロにする**。
 
 ```c
 newinfo = xt_alloc_table_info(size);
-memset(newinfo->entries, 0, size);   /* added to translate_compat_table() in ip_tables.c, ip6_tables.c, arp_tables.c */
+memset(newinfo->entries, 0, size);   /* ip_tables.c、ip6_tables.c、arp_tables.c の translate_compat_table() に追加 */
 ```
 
-This sidesteps the bounds-tracking problem completely — there's no longer a separate, per-entry write that can land outside the buffer, because every byte of the buffer is already zero before any entry-specific data is copied in. The fix was merged upstream in April 2021 and backported across stable kernels.
+これにより、境界追跡の問題は完全に回避される。エントリ固有のデータがコピーされる前にバッファのすべてのバイトがすでにゼロになっているので、バッファの外に着地しうる別個のエントリごとの書き込みはもはや存在しない。この修正は2021年4月にアップストリームにマージされ、stableカーネル全体にバックポートされた。
 
-The [patch drew no pushback on netfilter-devel](https://lore.kernel.org/netfilter-devel/20210407193857.21120-1-fw@strlen.de/) — Pablo Neira Ayuso applied Westphal's post within a week, replying simply "Applied."
+[パッチはnetfilter-develで何の反対も受けなかった](https://lore.kernel.org/netfilter-devel/20210407193857.21120-1-fw@strlen.de/)。Pablo Neira AyusoはWestphalの投稿を1週間以内に適用し、単に"Applied."とだけ返信した。
 
-The fix itself wasn't the end of the discussion, though. Two weeks later Westphal [posted a follow-up](https://lore.kernel.org/netfilter-devel/20210426101440.25335-1-fw@strlen.de/), "netfilter: allow to turn off xtables compat layer," adding a `CONFIG_NETFILTER_XTABLES_COMPAT` Kconfig knob (default `y`, for compatibility) so the 32-bit compat translation code could be compiled out entirely. His stated reasoning was blunt: "The compat layer needs to parse untrusted input (the ruleset) to translate it to a 64bit compatible format. We had a number of bugs in this department in the past, so allow users to turn this feature off."
+とはいえ、修正自体で議論が終わったわけではなかった。2週間後、Westphalは[後続パッチを投稿した](https://lore.kernel.org/netfilter-devel/20210426101440.25335-1-fw@strlen.de/)。"netfilter: allow to turn off xtables compat layer"で、`CONFIG_NETFILTER_XTABLES_COMPAT`というKconfigのノブ（互換性のためデフォルトは`y`）を追加し、32ビットのcompat変換コードを完全にコンパイルから外せるようにするものである。彼が述べた理由は率直だった: "The compat layer needs to parse untrusted input (the ruleset) to translate it to a 64bit compatible format. We had a number of bugs in this department in the past, so allow users to turn this feature off."（訳: compat層は、信頼できない入力（ルールセット）を解析して64ビット互換の形式に変換する必要がある。この分野では過去に多くのバグがあったので、ユーザーがこの機能をオフにできるようにする。）
 
-Jan Engelhardt pushed the idea further, asking whether the compat layer could be removed altogether rather than just made optional, since only one match (`xt_limit`'s `struct xt_rateinfo`) still needed a compat-specific struct layout: "Perhaps the remaining one... could be respecified as a v1, with the plan to ditch the v0. Then the entire xtables_compat code could go as well." Pablo Neira Ayuso agreed in principle — "If the remaining matches and targets that rely on this get a new revision to fix their structure layout issues, then this entire layer could be peeled off" — but Westphal explained why full removal wasn't that simple even then: the compat and native rule blobs have inherently different alignment rules (the `ip(6)t_entry`/match/target structures don't line up 1:1 across 32- and 64-bit layouts), `ipt_get_entries` carries mid-structure padding on x86_64 that i686 doesn't have, and the `compat_to_user` callback is needed by the standard target itself, not just by per-match structs like `xt_rateinfo`.
+Jan Engelhardtはこのアイデアをさらに推し進め、compat固有の構造体レイアウトを必要とするmatchはもう1つ（`xt_limit`の`struct xt_rateinfo`）しか残っていないのだから、compat層を単にオプションにするのではなく完全に削除できないかと尋ねた: "Perhaps the remaining one... could be respecified as a v1, with the plan to ditch the v0. Then the entire xtables_compat code could go as well."（訳: 残っている1つは……v0を廃止する計画のもとでv1として仕様を定め直せるかもしれない。そうすればxtables_compatのコード全体もなくせる。）Pablo Neira Ayusoは原則として同意した — "If the remaining matches and targets that rely on this get a new revision to fix their structure layout issues, then this entire layer could be peeled off"（訳: これに依存している残りのmatchとtargetが、構造体レイアウトの問題を修正する新しいリビジョンを得れば、この層全体を剥がせる）— が、Westphalは、その時点でも完全な削除がそれほど単純ではない理由を説明した。compatとネイティブのルールのblobは本質的に異なるアラインメント規則を持ち（`ip(6)t_entry`/match/targetの構造体は32ビットと64ビットのレイアウトの間で1対1に対応しない）、`ipt_get_entries`にはi686にはない構造体途中のパディングがx86_64にはあり、`compat_to_user`コールバックは`xt_rateinfo`のようなmatchごとの構造体だけでなく、標準targetそのものにも必要なのである。
 
-He offered a narrower version of the idea instead — dropping just the per-match `xt_match` compat callback, since `xt_limit` and `ebt_mark` were its only remaining users — while leaving the core translation layer in place. The Kconfig toggle, as originally posted, was what shipped; Pablo applied it the same day: "Applied, thanks."
+彼は代わりにこのアイデアのより限定的なバージョンを提案した。`xt_limit`と`ebt_mark`がその唯一の残りのユーザーであるため、matchごとの`xt_match`のcompatコールバックだけを削除し、コアの変換層はそのまま残すというものである。出荷されたのは最初に投稿されたとおりのKconfigトグルだった。Pabloは同じ日にそれを適用した: "Applied, thanks."
 
 ```bash
-# Compat netfilter is only reachable via 32-bit setsockopt() paths;
-# CONFIG_NETFILTER_XTABLES and user namespace availability are the relevant knobs
-sysctl kernel.unprivileged_userns_clone   # if present (some distros), 0 blocks the CAP_NET_ADMIN-via-userns path
+# compat netfilter には 32 ビットの setsockopt() パス経由でしか到達できない。
+# 関係するノブは CONFIG_NETFILTER_XTABLES とユーザー名前空間の利用可否である
+sysctl kernel.unprivileged_userns_clone   # 存在する場合（一部のディストリビューション）、0 にすると userns 経由の CAP_NET_ADMIN パスを塞げる
 ```
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A per-item bounds check is not a buffer bounds check.** Each `memset()` call was individually correct relative to the entry it was processing; the bug was in the aggregate, which no single call site could see.
+**項目ごとの境界チェックはバッファの境界チェックではない。** 各`memset()`呼び出しは、それが処理しているエントリに対しては個別に正しかった。バグは集合の中にあり、それはどの単一の呼び出し箇所からも見えなかった。
 
-**"Zero everything up front" beats "zero exactly what's needed, exactly where it's needed."** The fix traded a precise, per-entry computation for a coarser but provably-safe whole-buffer zero — a good general instinct when the precise version requires reasoning about interactions between many call sites.
+**「最初に全部ゼロにする」は「必要なところを、必要な分だけ正確にゼロにする」に勝る。** この修正は、精密なエントリごとの計算を、より粗いが安全性を証明できるバッファ全体のゼロ埋めと引き換えにした。精密なバージョンが多くの呼び出し箇所間の相互作用についての推論を必要とする場合には、良い一般的な直感である。
 
-**A tiny primitive plus a determined exploit writer equals full compromise.** Four zero bytes, written out of bounds, were enough to build a complete kernel-code-execution chain — severity assessments based on "how many bytes" rather than "what can be reached from here" undersell bugs like this one.
+**小さなプリミティブと決意あるエクスプロイト作者が揃えば、完全な侵害になる。** 範囲外に書き込まれた4バイトのゼロだけで、完全なカーネルコード実行のチェーンを構築するのに十分だった。「ここから何に到達できるか」ではなく「何バイトか」に基づく深刻度評価は、このようなバグを過小評価する。
 
-**An unanswered automated report is not a dismissed one — it's an untriaged one.** syzbot handed maintainers a full crash trace and working reproducer eight months before the bug was independently rediscovered and weaponized; what was missing wasn't detection but triage. A fuzzer finding a bug and a human acting on it are two different events, and the gap between them is exactly where a low-severity-looking crash can sit until someone builds an exploit chain for it.
+**返答のない自動レポートは、却下されたレポートではない。トリアージされていないレポートである。** syzbotは、バグが独立に再発見されて武器化される8か月前に、完全なクラッシュトレースと動作する再現プログラムをメンテナに手渡していた。欠けていたのは検出ではなくトリアージだった。ファザーがバグを見つけることと人間がそれに対処することは2つの別々の出来事であり、その間の隙間こそ、深刻度が低そうに見えるクラッシュが、誰かがそのためのエクスプロイトチェーンを構築するまで放置されうる場所である。
 
-!!! warning "Pattern to watch for"
-    User-namespace-reachable `CAP_NET_ADMIN`/`CAP_NET_RAW` code paths deserve extra scrutiny — capabilities that once implied "trusted root-equivalent caller" now routinely apply to unprivileged users inside containers. If `kernel.unprivileged_userns_clone` (or your distro's equivalent knob) is enabled, any bug in a `CAP_NET_ADMIN`-gated path is a potential container-escape primitive, not just a local bug.
+!!! warning "注意すべきパターン"
+    ユーザー名前空間から到達可能な`CAP_NET_ADMIN`/`CAP_NET_RAW`のコードパスは、特に入念に精査する価値がある。かつては「信頼されたroot相当の呼び出し元」を意味していたケーパビリティが、今ではコンテナ内の非特権ユーザーに日常的に適用される。`kernel.unprivileged_userns_clone`（またはディストリビューションの同等のノブ）が有効なら、`CAP_NET_ADMIN`で制限されたパスのどのバグも、単なるローカルのバグではなく、潜在的なコンテナエスケープのプリミティブである。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Netfilter Architecture](../netfilter.md) — x_tables, hooks, and the compat translation layer behind this bug
-- [Network Namespaces](../net-namespaces.md) — how unprivileged user+network namespaces expose `CAP_NET_ADMIN`-gated code paths
-- [AF_PACKET Privilege Escalation](af-packet.md) — another capability-gated local bug turned container-escape primitive
+- [Netfilterのアーキテクチャ](../netfilter.md) — x_tables、フック、そしてこのバグの背後にあるcompat変換層
+- [ネットワーク名前空間](../net-namespaces.md) — 非特権のユーザー+ネットワーク名前空間が、`CAP_NET_ADMIN`で制限されたコードパスをどう露出させるか
+- [AF_PACKETの権限昇格](af-packet.md) — ケーパビリティで制限されたローカルのバグが、コンテナエスケープのプリミティブになったもう一つの例
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [NVD: CVE-2021-22555](https://nvd.nist.gov/vuln/detail/CVE-2021-22555) — Netfilter x_tables heap overflow CVE record
+- [NVD: CVE-2021-22555](https://nvd.nist.gov/vuln/detail/CVE-2021-22555) — Netfilter x_tablesヒープオーバーフローのCVEレコード
 - [git.kernel.org: b29c457a6511](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b29c457a6511435960115c0f548c4360d5f4801d) — "netfilter: x_tables: fix compat match/target pad out-of-bound write"
-- [lore.kernel.org: netfilter: x_tables: fix compat match/target pad out-of-bound write](https://lore.kernel.org/netfilter-devel/20210407193857.21120-1-fw@strlen.de/) — Florian Westphal's patch as posted to netfilter-devel
-- [syzbot: KASAN: slab-out-of-bounds Write in xt_compat_target_from_user](https://syzkaller.appspot.com/bug?extid=cfc0247ac173f597aaaa) — the syzbot dashboard for the original August 2020 report, showing no reply on the report thread until the fix landed eight months later
-- [lore.kernel.org: syzbot's original report](https://lore.kernel.org/all/00000000000022934305ad166be3@google.com/) — the unanswered 17 August 2020 KASAN report emailed to netdev, netfilter-devel, and the netfilter maintainers
-- [lore.kernel.org: netfilter: allow to turn off xtables compat layer](https://lore.kernel.org/netfilter-devel/20210426101440.25335-1-fw@strlen.de/) — the follow-up thread debating a `CONFIG_NETFILTER_XTABLES_COMPAT` opt-out versus removing the compat layer entirely
-- [Andy Nguyen: CVE-2021-22555: Turning \x00\x00 into 10000$](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html) — the primary-source exploit writeup, including the kCTF container-escape use
-- [LWN: CVE-2021-22555: Turning \x00\x00 into 10000$](https://lwn.net/Articles/862955/) — LWN's brief on Nguyen's writeup
+- [lore.kernel.org: netfilter: x_tables: fix compat match/target pad out-of-bound write](https://lore.kernel.org/netfilter-devel/20210407193857.21120-1-fw@strlen.de/) — netfilter-develに投稿されたFlorian Westphalのパッチ
+- [syzbot: KASAN: slab-out-of-bounds Write in xt_compat_target_from_user](https://syzkaller.appspot.com/bug?extid=cfc0247ac173f597aaaa) — 2020年8月の元のレポートのsyzbotダッシュボード。8か月後に修正がマージされるまで、レポートのスレッドに返信がなかったことを示している
+- [lore.kernel.org: syzbotの元のレポート](https://lore.kernel.org/all/00000000000022934305ad166be3@google.com/) — netdev、netfilter-devel、netfilterメンテナにメールで送られ、返答のなかった2020年8月17日のKASANレポート
+- [lore.kernel.org: netfilter: allow to turn off xtables compat layer](https://lore.kernel.org/netfilter-devel/20210426101440.25335-1-fw@strlen.de/) — `CONFIG_NETFILTER_XTABLES_COMPAT`によるオプトアウトか、compat層の完全な削除かを議論した後続スレッド
+- [Andy Nguyen: CVE-2021-22555: Turning \x00\x00 into 10000$](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html) — 一次資料であるエクスプロイト解説。kCTFでのコンテナエスケープへの利用を含む
+- [LWN: CVE-2021-22555: Turning \x00\x00 into 10000$](https://lwn.net/Articles/862955/) — Nguyenの解説についてのLWNの短報

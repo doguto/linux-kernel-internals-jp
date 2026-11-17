@@ -1,50 +1,50 @@
-# OverlayFS: The Copy-Up That Trusted an Unmapped UID {#overlayfs-the-copy-up-that-trusted-an-unmapped-uid}
+# OverlayFS: マッピングされていないUIDを信頼したcopy-up {#overlayfs-the-copy-up-that-trusted-an-unmapped-uid}
 
-> CVE-2023-0386 — OverlayFS's copy-up path never checked whether a lower file's owning UID/GID actually had a mapping in the mounter's user namespace, so an attacker could smuggle a capability-bearing file through an unprivileged overlay mount and end up with root
+> CVE-2023-0386 — OverlayFSのcopy-upパスは、下位ファイルの所有者UID/GIDがマウントした者のユーザー名前空間に実際にマッピングを持っているかを一度も確認していなかった。そのため攻撃者は、ケーパビリティを持つファイルを非特権のoverlayマウントを通じて持ち込み、最終的にrootを得ることができた
 
-Disclosed
-:   March 22, 2023 (NVD record)
+公開
+:   2023年3月22日（NVDレコード）
 
 CVSS
-:   7.8 HIGH (`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`)
+:   7.8 HIGH（`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`）
 
-Bug present since
-:   5.11 (February 2021), when `459c7c565ac3` ("ovl: unprivieged mounts") let unprivileged users mount OverlayFS inside a user namespace
+バグの存在期間
+:   `459c7c565ac3`（"ovl: unprivieged mounts"）によって非特権ユーザーがユーザー名前空間内でOverlayFSをマウントできるようになった5.11（2021年2月）以降
 
-Fixed in
-:   commit `4f11ada10d0a`, mainline 6.2, February 2023; backported to stable
+修正
+:   コミット `4f11ada10d0a`、メインライン6.2、2023年2月。stableにバックポート済み
 
-Exploit tool
-:   yes — public PoC (`xkaneiki/CVE-2023-0386`, the `ovlcap` exploit) demonstrated privilege escalation to root
+エクスプロイトツール
+:   あり — 公開PoC（`xkaneiki/CVE-2023-0386`、`ovlcap` エクスプロイト）がrootへの権限昇格を実証
 
-Actively exploited
-:   yes — added to CISA KEV, June 17, 2025
+実際の悪用
+:   あり — 2025年6月17日にCISA KEVに追加
 
-*Part of [War Stories: VFS Bugs and Regressions](../war-stories.md).*
+*[事件簿: VFSのバグとリグレッション](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-`459c7c565ac3` ("ovl: unprivieged mounts", Miklos Szeredi, Linux 5.11) let unprivileged users create OverlayFS mounts inside their own user namespace — a feature explicitly built for the "rootless container" crowd, and one OverlayFS's documented permission model was designed to make safe: whatever the mounter could already do to the underlying layers with their own credentials is the ceiling on what the overlay mount can do, no more.
+`459c7c565ac3`（"ovl: unprivieged mounts"、Miklos Szeredi、Linux 5.11）は、非特権ユーザーが自身のユーザー名前空間内でOverlayFSマウントを作成できるようにした。これは「rootlessコンテナ」の利用者層のために明示的に作られた機能であり、OverlayFSの文書化された権限モデルはそれを安全にするよう設計されていた。マウントした者が自身の資格情報で下位のレイヤーに対してすでにできることが、overlayマウントでできることの上限であり、それ以上はできない、というものである。
 
-Writing to a file that only exists in the read-only lower layer triggers a **copy-up**: OverlayFS reads the lower file's `stat` data — including its owning UID and GID as seen through the mounter's user namespace — and creates a matching file in the writable upper layer via `ovl_copy_up_one()` in `fs/overlayfs/copy_up.c`.
+読み取り専用の下位レイヤーにしか存在しないファイルに書き込むと、**copy-up** が発生する。OverlayFSは下位ファイルの `stat` データ（マウントした者のユーザー名前空間を通して見た所有者UIDとGIDを含む）を読み、`fs/overlayfs/copy_up.c` の `ovl_copy_up_one()` を通じて、書き込み可能な上位レイヤーに対応するファイルを作成する。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-A UID or GID with no mapping at all in a user namespace isn't reported to `stat(2)` as an error — it's reported as the **overflow UID**, `65534` (`nobody`) by default. `ovl_copy_up_one()` took that `stat` result at face value and proceeded with the copy-up regardless of whether the real underlying UID actually had a mapping in `current_user_ns()`.
+ユーザー名前空間内でまったくマッピングを持たないUIDやGIDは、`stat(2)` にエラーとして報告されるのではなく、**オーバーフローUID**（デフォルトでは `65534`、`nobody`）として報告される。`ovl_copy_up_one()` はその `stat` の結果を額面どおりに受け取り、実際の下位のUIDが `current_user_ns()` で実際にマッピングを持っているかどうかにかかわらず、copy-upを進めていた。
 
-That created exactly the inconsistency the fix's commit message calls out: if the overflow UID `65534` itself happened to have a real mapping in the mounter's namespace, copy-up would succeed and create a file owned by whatever `65534` mapped to — even though the *original* UID on the lower file was never actually mapped, meaning a manual `cp -a` run by that same unprivileged user, going through the ordinary permission-checked path, would have failed at exactly this point instead.
+これは、修正のコミットメッセージが指摘しているまさにその不整合を生んだ。オーバーフローUIDの `65534` 自体がたまたまマウントした者の名前空間で本当のマッピングを持っていた場合、copy-upは成功し、`65534` がマッピングされた先のユーザーが所有するファイルを作成する。下位ファイルの*元の*UIDは実際には一度もマッピングされておらず、同じ非特権ユーザーが通常の権限チェック付きのパスを通じて手動で `cp -a` を実行していれば、まさにこの時点で失敗していたはずであるにもかかわらずである。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The publicly released proof of concept (`xkaneiki/CVE-2023-0386`, mirroring the pattern of the earlier "GameOver(lay)" family of OverlayFS bugs) pairs a FUSE-backed lower filesystem the attacker fully controls with a file carrying Linux file capabilities. The attacker's FUSE layer reports that file's ownership in a way that exploits the unmapped-UID/overflow-UID inconsistency, and triggers a copy-up of that capability-bearing file into the writable upper layer — landing it somewhere the capabilities are honored, rather than being rejected the way a same-privilege manual copy would have been. Red Hat's advisory summarizes the resulting primitive plainly: "unauthorized access to the execution of the setuid file with capabilities... how a user copies a capable file from a nosuid mount into another mount." From there the PoC's `getshell` step turns the misappropriated capability into a full root shell. Because unprivileged user-namespace mounts of OverlayFS are enabled by default on mainstream distributions (Ubuntu among them) and are also used by common container runtimes, the practical reach of the bug was every desktop and many container hosts running an affected kernel. CISA added CVE-2023-0386 to its Known Exploited Vulnerabilities catalog on June 17, 2025, confirming real-world exploitation well over two years after the initial patch.
+公開された概念実証（`xkaneiki/CVE-2023-0386`。以前のOverlayFSのバグ群「GameOver(lay)」のパターンを踏襲している）は、攻撃者が完全に制御するFUSEベースの下位ファイルシステムと、Linuxのファイルケーパビリティを持つファイルを組み合わせる。攻撃者のFUSEレイヤーは、マッピングされていないUIDとオーバーフローUIDの不整合を突く形でそのファイルの所有権を報告し、そのケーパビリティを持つファイルの書き込み可能な上位レイヤーへのcopy-upを引き起こす。同じ権限での手動コピーなら拒否されていたはずのところを、ケーパビリティが尊重される場所に置いてしまうのである。Red Hatのアドバイザリは、結果として得られるプリミティブを率直に要約している。"unauthorized access to the execution of the setuid file with capabilities... how a user copies a capable file from a nosuid mount into another mount."（訳: ケーパビリティ付きsetuidファイルの実行への不正アクセス……ユーザーがケーパビリティを持つファイルをnosuidマウントから別のマウントへコピーする方法。）そこからPoCの `getshell` ステップが、不正に得たケーパビリティを完全なrootシェルに変える。OverlayFSの非特権ユーザー名前空間マウントは主要なディストリビューション（Ubuntuを含む）でデフォルトで有効になっており、一般的なコンテナランタイムでも使われているため、このバグの実際の影響範囲は、影響を受けるカーネルを実行しているすべてのデスクトップと多くのコンテナホストに及んだ。CISAは2025年6月17日にCVE-2023-0386をKnown Exploited Vulnerabilitiesカタログに追加し、最初のパッチから2年以上経った後も現実世界での悪用があることを確認した。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-`459c7c565ac3` built unprivileged OverlayFS mounts on the premise that the mounter's own user-namespace permission checks would bound what the overlay could do — a correct premise everywhere the mounter's credentials were actually re-checked at the point of action. Copy-up's ownership handling was one place that premise silently didn't hold: it read `stat` data that had *already* been through the mounter's UID/GID mapping (so it looked "safe" — just a number) without separately confirming that number reflected a real, valid mapping rather than the ambiguous overflow value every unmapped ID collapses to. A `65534` from a genuinely-mapped `nobody` and a `65534` standing in for "this ID isn't mapped at all" are indistinguishable once they reach `stat`, and only the write path treated them as equivalent when they weren't.
+`459c7c565ac3` は、マウントした者自身のユーザー名前空間の権限チェックがoverlayでできることを制限するという前提の上に、非特権のOverlayFSマウントを構築した。マウントした者の資格情報が操作の時点で実際に再チェックされるところでは、どこでも正しい前提である。copy-upの所有権の扱いは、その前提が黙って成り立っていなかった場所の1つだった。それは、マウントした者のUID/GIDマッピングを*すでに*通過した `stat` データを読んでいた（そのため「安全」に、ただの数値に見えた）が、その数値が、マッピングされていないIDがすべて収束する曖昧なオーバーフロー値ではなく、本当に有効なマッピングを反映しているかを別途確認していなかった。本当にマッピングされた `nobody` からの `65534` と、「このIDはまったくマッピングされていない」の代わりとしての `65534` は、`stat` に届いた時点で区別できない。そして書き込みパスだけが、等価でないそれらを等価なものとして扱っていた。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`4f11ada10d0a` ("ovl: fail on invalid uid/gid mapping at copy up") adds exactly the check that was missing — four lines, right before copy-up proceeds:
+`4f11ada10d0a`（"ovl: fail on invalid uid/gid mapping at copy up"）は、欠けていたまさにそのチェックを追加する。copy-upを進める直前の4行である。
 
 ```c
 if (!kuid_has_mapping(current_user_ns(), ctx.stat.uid) ||
@@ -52,26 +52,26 @@ if (!kuid_has_mapping(current_user_ns(), ctx.stat.uid) ||
 	return -EOVERFLOW;
 ```
 
-If the lower file's real UID or GID has no valid mapping in the mounter's user namespace, copy-up now fails outright with `-EOVERFLOW`, matching what a manual `cp -a` by that same user would have done — closing the exact inconsistency the commit message flags between `stat(2)`'s overflow-UID behavior and POSIX ACLs, which already return `-1` and fail cleanly on an invalid UID/GID rather than silently substituting a placeholder.
+下位ファイルの本当のUIDやGIDがマウントした者のユーザー名前空間で有効なマッピングを持たない場合、copy-upは `-EOVERFLOW` で即座に失敗するようになった。これは同じユーザーによる手動の `cp -a` が行っていたであろう動作と一致する。これにより、コミットメッセージが指摘する、`stat(2)` のオーバーフローUIDの挙動とPOSIX ACLとの間のまさにその不整合が解消された。POSIX ACLはすでに、不正なUID/GIDに対して黙ってプレースホルダーで置き換えるのではなく、`-1` を返してきれいに失敗するようになっていた。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A value that has already passed through one security-relevant transformation can look "safe" to code downstream that doesn't know it needs to check further.** By the time copy-up saw a UID, it had already been mapped through the mounter's namespace — that step alone made it look like an ordinary, trustworthy number, when what it actually needed was a check that the mapping had *succeeded* rather than silently degraded to an ambiguous placeholder.
+**セキュリティ上重要な変換をすでに1つ通過した値は、さらにチェックが必要だと知らない下流のコードには「安全」に見えうる。** copy-upがUIDを目にする時点で、それはすでにマウントした者の名前空間を通してマッピングされていた。その段階だけで普通の信頼できる数値に見えたが、実際に必要だったのは、マッピングが曖昧なプレースホルダーに黙って劣化したのではなく*成功した*ことのチェックだった。
 
-**An overflow or sentinel value that collapses multiple distinct real-world states into one representation is a standing invitation for exactly this bug.** `65534` meaning both "genuinely nobody" and "unmapped, we don't actually know" is fine for `stat(2)`'s user-facing contract; it is not fine for security-relevant code that acts on the number without first ruling out the second meaning.
+**現実世界の複数の異なる状態を1つの表現に収束させるオーバーフロー値や番兵値は、まさにこの種のバグを常に招いている。** `65534` が「本当にnobody」と「マッピングされておらず、実際にはわからない」の両方を意味することは、`stat(2)` のユーザー向けの契約としては問題ない。しかし、まず2つ目の意味を排除せずにその数値に基づいて動作するセキュリティ上重要なコードにとっては問題である。
 
-!!! warning "Pattern to watch for"
-    Wherever an ID (UID, GID, or any namespaced identifier) crosses a mapping boundary and the result is consumed as though it were an ordinary value, check for the overflow/sentinel case explicitly before acting on it — especially when the action (like copy-up here) has security consequences beyond the read that produced the value in the first place.
+!!! warning "注意すべきパターン"
+    ID（UID、GID、その他名前空間付きの識別子）がマッピングの境界をまたぎ、その結果が普通の値であるかのように消費される場所ではどこでも、それに基づいて動作する前にオーバーフロー／番兵のケースを明示的にチェックすること。特にその動作（ここでのcopy-upのように）が、そもそもその値を生み出した読み出しを超えるセキュリティ上の帰結を持つ場合に注意すること。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [VFS Overview](../README.md) — the generic superblock/inode operations OverlayFS layers on top of
-- [OverlayFS Capability-Xattr Bypass](overlayfs-capability-bypass.md) — an earlier variant of the same "capability survives a copy-up it shouldn't" bug class
-- [Security: LSMs, Capabilities, and Seccomp](../../security/README.md) — the capability-check machinery OverlayFS's copy-up path depends on
+- [VFSの概要](../README.md) — OverlayFSがその上に重なる汎用のsuperblock/inode操作
+- [OverlayFS: ケーパビリティxattrのバイパス](overlayfs-capability-bypass.md) — 同じ「ケーパビリティが、生き残るべきでないcopy-upを生き残る」種類のバグの、より初期の変種
+- [セキュリティ: LSM、ケーパビリティ、seccomp](../../security/README.md) — OverlayFSのcopy-upパスが依存するケーパビリティチェックの機構
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: 4f11ada10d0a](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4f11ada10d0ad3fd53e2bd67806351de63a4f9c3) — "ovl: fail on invalid uid/gid mapping at copy up," the fix
-- [git.kernel.org: 459c7c565ac3](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=459c7c565ac36ba09ffbf24231147f408fde4203) — "ovl: unprivieged mounts," the commit that enabled the mount configuration this bug required
-- [NVD: CVE-2023-0386](https://nvd.nist.gov/vuln/detail/CVE-2023-0386) — CVE record, CVSS 7.8 HIGH; CISA KEV-listed June 17, 2025
-- [Red Hat: CVE-2023-0386](https://access.redhat.com/security/cve/cve-2023-0386) — vendor advisory and technical summary
+- [git.kernel.org: 4f11ada10d0a](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4f11ada10d0ad3fd53e2bd67806351de63a4f9c3) — "ovl: fail on invalid uid/gid mapping at copy up"、修正
+- [git.kernel.org: 459c7c565ac3](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=459c7c565ac36ba09ffbf24231147f408fde4203) — "ovl: unprivieged mounts"、このバグが必要としたマウント構成を可能にしたコミット
+- [NVD: CVE-2023-0386](https://nvd.nist.gov/vuln/detail/CVE-2023-0386) — CVEレコード、CVSS 7.8 HIGH。2025年6月17日にCISA KEVに掲載
+- [Red Hat: CVE-2023-0386](https://access.redhat.com/security/cve/cve-2023-0386) — ベンダーのアドバイザリと技術的な要約

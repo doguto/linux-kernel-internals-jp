@@ -1,68 +1,68 @@
-# The 21-Year-Latent USB Mixer Teardown Use-After-Free {#the-21-year-latent-usb-mixer-teardown-use-after-free}
+# 21年潜伏したUSBミキサー破棄時のuse-after-free {#the-21-year-latent-usb-mixer-teardown-use-after-free}
 
-> A 2005 commit gave every registered ALSA control a back-pointer to its USB mixer object. Nobody stopped that mixer object from being freed out from under a live control for nearly 21 years — until a failed probe did exactly that.
+> 2005年のあるコミットが、登録されたすべてのALSAコントロールにUSBミキサーオブジェクトへの逆ポインタを持たせた。生きているコントロールの足元からそのミキサーオブジェクトが解放されるのを、21年近く誰も防いでいなかった。そしてプローブの失敗がまさにそれを引き起こした。
 
-Landed
-:   Linux, January 2026 (CVE-2026-23089)
+収録
+:   Linux、2026年1月（CVE-2026-23089）
 
-Driver
-:   `snd-usb-audio` (`sound/usb/mixer.c`)
+ドライバ
+:   `snd-usb-audio`（`sound/usb/mixer.c`）
 
-Fix author
+修正の作者
 :   Berk Cem Goksel
 
-Origin commit
-:   `6639b6c2367f` (Clemens Ladisch, April 2005)
+原因となったコミット
+:   `6639b6c2367f`（Clemens Ladisch、2005年4月）
 
-Mechanism
-:   Use-after-free, `struct usb_mixer_interface`
+メカニズム
+:   use-after-free、`struct usb_mixer_interface`
 
 CVE-2026-23089
 
-*Part of [War Stories: ALSA Bugs and Regressions](../war-stories.md).*
+*[事件簿: ALSAのバグとリグレッション](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-USB audio devices can report status changes — a jack plugged in, a volume knob turned on the hardware itself — over a dedicated USB status interrupt endpoint rather than requiring the driver to poll. `6639b6c2367f` ("[ALSA] usb-audio - add mixer control notifications"), authored by Clemens Ladisch and committed in April 2005, added the plumbing for this: when a status interrupt arrives, the driver needs to figure out which ALSA control(s) that notification applies to and fire the right callback.
+USBオーディオデバイスは、ドライバにポーリングさせる代わりに、専用のUSBステータス割り込みエンドポイントを通じて状態の変化（ジャックが挿された、ハードウェア自体の音量ノブが回された）を報告できる。Clemens Ladischが作成し2005年4月にコミットされた `6639b6c2367f`（"[ALSA] usb-audio - add mixer control notifications"）は、このための配管を追加した。ステータス割り込みが届くと、ドライバはその通知がどのALSAコントロールに当てはまるかを突き止め、正しいコールバックを発火させる必要がある。
 
-That lookup is backed by `mixer->id_elems`, an array on `struct usb_mixer_interface` indexed by the USB descriptor's unit ID, with each populated slot pointing at a `struct usb_mixer_elem_list` node. Every ALSA control created while parsing the device's mixer descriptors gets its own such node — allocated separately from the `id_elems` array itself — and that node carries a `head.mixer` back-pointer to the `struct usb_mixer_interface` object that owns it. The notification-interrupt handler walks `id_elems` to find the right node; the node's own callbacks (mixer value reads among them) go the other direction, through `head.mixer`, whenever they need to reach the mixer object's own state.
+その検索を支えているのが `mixer->id_elems` である。これは `struct usb_mixer_interface` 上の配列で、USBディスクリプタのユニットIDでインデックスされ、埋まっている各スロットは `struct usb_mixer_elem_list` ノードを指す。デバイスのミキサーディスクリプタの解析中に作成されるALSAコントロールはそれぞれ自分専用のノードを持ち（`id_elems` 配列自体とは別に割り当てられる）、そのノードは自身を所有する `struct usb_mixer_interface` オブジェクトへの逆ポインタ `head.mixer` を持つ。通知割り込みハンドラは `id_elems` を走査して正しいノードを見つける。ノード自身のコールバック（ミキサー値の読み出しなど）は、ミキサーオブジェクト自身の状態に到達する必要があるときはいつでも、逆方向に `head.mixer` を通じてたどる。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-`snd_usb_create_mixer()` builds up a device's full mixer — parsing every unit descriptor, creating an ALSA control for each — before calling `snd_card_register()` to make the card live. If mixer creation fails partway through (a malformed or partially-enumerated descriptor set, a USB-level failure mid-parse — the class of condition a hostile or malfunctioning USB device can trigger directly), the error path calls `snd_usb_mixer_free()` to unwind. That function frees `mixer->id_elems`, and then — at the very end — `kfree(mixer)`: the entire `struct usb_mixer_interface` object.
+`snd_usb_create_mixer()` は、`snd_card_register()` を呼んでカードを有効にする前に、すべてのユニットディスクリプタを解析してそれぞれにALSAコントロールを作成し、デバイスの完全なミキサーを組み立てる。ミキサーの作成が途中で失敗した場合（ディスクリプタの集合が不正であるか部分的にしか列挙されていない、解析中にUSBレベルの障害が起きた、など。悪意のある、あるいは故障したUSBデバイスが直接引き起こせる種類の状況）、エラーパスは `snd_usb_mixer_free()` を呼んで巻き戻す。この関数は `mixer->id_elems` を解放し、そして最後に `kfree(mixer)`、つまり `struct usb_mixer_interface` オブジェクト全体を解放する。
 
-The problem: `snd_card_register()` can run — and the OSS-compatibility mixer emulation layer can walk the card's already-registered controls — even when the USB-side mixer setup failed. Controls that had already been registered on the sound card before the failure are separate allocations (`usb_mixer_elem_info`/`usb_mixer_elem_list` nodes) that survive `snd_usb_mixer_free()` untouched — but each one's `head.mixer` field is now a dangling pointer to the `usb_mixer_interface` that function just freed.
+問題は、USB側のミキサーのセットアップが失敗した場合でも、`snd_card_register()` が実行されうること、そしてOSS互換のミキサーエミュレーションレイヤーがカードのすでに登録済みのコントロールを走査しうることである。失敗前にすでにサウンドカードに登録されていたコントロールは別個の割り当て（`usb_mixer_elem_info`/`usb_mixer_elem_list` ノード）であり、`snd_usb_mixer_free()` の後も手つかずで生き残る。しかしそれぞれの `head.mixer` フィールドは、この関数が解放したばかりの `usb_mixer_interface` を指すダングリングポインタになっている。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-Any subsequent read through one of those surviving controls that dereferences `head.mixer` — the crash trace in the fix's commit message runs through `get_ctl_value()` reading `cval->head.mixer->protocol`, reached from the OSS mixer-emulation compatibility layer during `snd_card_register()` — touches freed heap memory. On a system where that memory had been reallocated for something else in the interim, this is a classic use-after-free: attacker-influenced data read as if it were mixer object state, or a crash if the freed page had been unmapped. NVD rates it CVSS 3.1 7.8 (HIGH), consistent with local privilege escalation via memory corruption rather than a remote vector — the trigger condition needs a malicious or malfunctioning USB device attached to the machine, not network input.
+生き残ったコントロールの1つを通じて `head.mixer` を参照外しするその後の読み出しはすべて、解放済みのヒープメモリに触れる。修正のコミットメッセージにあるクラッシュトレースは、`snd_card_register()` 中にOSSミキサーエミュレーション互換レイヤーから到達し、`cval->head.mixer->protocol` を読む `get_ctl_value()` を通っている。その間にそのメモリが別の用途に再割り当てされていたシステムでは、これは典型的なuse-after-freeである。攻撃者に影響されたデータがミキサーオブジェクトの状態であるかのように読まれるか、解放されたページがアンマップされていればクラッシュする。NVDはこれをCVSS 3.1で7.8（HIGH）と評価しており、リモートからのベクタではなく、メモリ破壊によるローカル権限昇格と整合する。トリガー条件には、ネットワーク入力ではなく、悪意のある、あるいは故障したUSBデバイスがマシンに接続されていることが必要である。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The teardown path treated the mixer object as if it and the ALSA controls it had registered shared the same lifetime — free the mixer, and there'd be nothing left that could read it. That was true for controls that were never registered because mixer creation failed before reaching them. It was false for controls registered earlier in the same `snd_usb_create_mixer()` call, before the failure — those had already been handed to ALSA's core, which doesn't know or care that the USB-side mixer object that created them just tore itself down. The mixer's own lifetime and its readers' lifetime (registered ALSA controls, reachable independently through the card once registration succeeds) diverged, and the cleanup path only accounted for the mixer's own side of that divergence.
+破棄パスは、ミキサーオブジェクトと、それが登録したALSAコントロールが同じ寿命を共有しているかのように扱っていた。ミキサーを解放すれば、それを読めるものは何も残らないというわけである。これは、ミキサーの作成がそこに到達する前に失敗したために一度も登録されなかったコントロールについては正しかった。しかし同じ `snd_usb_create_mixer()` 呼び出しの中で失敗より前に登録されたコントロールについては誤りだった。それらはすでにALSAのコアに渡されており、コアはそれらを作成したUSB側のミキサーオブジェクトが自らを破棄したばかりであることを知らないし、気にもしない。ミキサー自身の寿命と、その読み手（登録が成功すればカードを通じて独立に到達可能な、登録済みのALSAコントロール）の寿命は分岐しており、後始末のパスはその分岐のうちミキサー自身の側しか考慮していなかった。
 
-The bug sat unexercised for close to 21 years because it requires the specific combination of (a) at least one control successfully registered, then (b) mixer creation failing on a *later* unit, a sequencing a well-formed, fully-enumerable USB audio device essentially never produces on its own.
+このバグが21年近く発動しないままだったのは、(a) 少なくとも1つのコントロールが登録に成功し、その後 (b) *後の*ユニットでミキサーの作成が失敗する、という特定の組み合わせを必要とするからである。正しい形式で完全に列挙可能なUSBオーディオデバイスが、自然にこの順序を生み出すことは事実上ない。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-The fix (`930e69757b74`) changes `snd_usb_mixer_free()`'s teardown order: before freeing `id_elems` itself, it walks the array and calls `snd_ctl_remove()` on every populated entry's control, un-registering each one from the card first. Because `snd_ctl_remove()` deallocates the `usb_mixer_elem_list` node it's called on as a side effect, the walk saves each entry's `next_id_elem` pointer before making the call — using a value after the function that just freed it would just move the same bug one line down. Only once every control has been fully unregistered does the array itself get freed.
+修正（`930e69757b74`）は `snd_usb_mixer_free()` の破棄の順序を変える。`id_elems` 自体を解放する前に配列を走査し、埋まっている各エントリのコントロールに対して `snd_ctl_remove()` を呼び、まずそれぞれをカードから登録解除する。`snd_ctl_remove()` は副作用として呼び出し対象の `usb_mixer_elem_list` ノードを解放するので、走査では呼び出しの前に各エントリの `next_id_elem` ポインタを保存しておく。解放したばかりの関数の後でその値を使えば、同じバグが1行下に移るだけだからである。すべてのコントロールが完全に登録解除されて初めて、配列自体が解放される。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A cleanup function's job is to make every remaining reference into the thing it's freeing unreachable first, not just to free the thing.** The mixer object had exactly one owner (the USB probe path) but was reachable from many readers (every control that had been registered against it, via each one's `head.mixer` back-pointer) through a path — ALSA's own control-lookup machinery, reachable independently through the card — the mixer's teardown code didn't traverse.
+**後始末関数の仕事は、対象を解放することだけではなく、まず解放する対象への残っている参照をすべて到達不能にすることである。** ミキサーオブジェクトの所有者はちょうど1つ（USBのプローブパス）だったが、多数の読み手（それに対して登録されたすべてのコントロール。それぞれの `head.mixer` 逆ポインタ経由）から、ミキサーの破棄コードがたどらない経路（カードを通じて独立に到達可能な、ALSA自身のコントロール検索機構）を通じて到達可能だった。
 
-**Partial-failure teardown paths are exactly where "the object shouldn't have any live readers by now" assumptions break**, because partial failure is definitionally the state where some initialization completed and some didn't — readers created by the completed part don't know the rest failed.
+**部分的な失敗の破棄パスこそ、「この時点でオブジェクトに生きた読み手はいないはずだ」という前提が崩れる場所である。** 部分的な失敗とは、定義上、初期化の一部が完了し一部が完了していない状態だからである。完了した部分によって作られた読み手は、残りが失敗したことを知らない。
 
-!!! warning "Pattern to watch for"
-    A teardown/error path that frees a data structure without first checking whether anything created *before* the failure point still holds a reference into it — especially when that something (here, an ALSA control) is independently reachable through a different subsystem's own lookup path, not just through the object being freed.
+!!! warning "注意すべきパターン"
+    失敗地点*より前に*作られた何かがまだそのデータ構造への参照を保持していないかを先に確認せずに、データ構造を解放する破棄／エラーパス。特にその何か（ここではALSAコントロール）が、解放されるオブジェクトを通じてだけでなく、別のサブシステム自身の検索パスを通じて独立に到達可能な場合に注意すること。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [ALSA Overview](../README.md) — `struct snd_card`, control registration, and where USB audio's mixer fits into the card lifecycle
-- [The USB Audio Clock Descriptor Out-of-Bounds Reads](usb-audio-clock-descriptor-oob.md) — a different `sound/usb/` bug class: missing descriptor-length validation rather than a lifetime mismatch
+- [ALSAの概要](../README.md) — `struct snd_card`、コントロールの登録、そしてUSBオーディオのミキサーがカードのライフサイクルのどこに収まるか
+- [USBオーディオのクロックディスクリプタ範囲外読み出し](usb-audio-clock-descriptor-oob.md) — 寿命の不一致ではなく、ディスクリプタ長の検証漏れという別の種類の `sound/usb/` のバグ
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [NVD: CVE-2026-23089](https://nvd.nist.gov/vuln/detail/CVE-2026-23089) — CVSS 3.1 7.8 HIGH, CWE-416 (Use After Free)
-- [git.kernel.org: 930e69757b74](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=930e69757b74c3ae083b0c3c7419bfe7f0edc7b2) — the fix: unregister every control before freeing the mixer object
-- [git.kernel.org: 6639b6c2367f](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6639b6c2367f884ca172b78d69f7da17bfab2e5e) — the April 2005 origin commit that introduced the notification-routing array
+- [NVD: CVE-2026-23089](https://nvd.nist.gov/vuln/detail/CVE-2026-23089) — CVSS 3.1 7.8 HIGH、CWE-416（Use After Free）
+- [git.kernel.org: 930e69757b74](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=930e69757b74c3ae083b0c3c7419bfe7f0edc7b2) — 修正: ミキサーオブジェクトを解放する前にすべてのコントロールを登録解除する
+- [git.kernel.org: 6639b6c2367f](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6639b6c2367f884ca172b78d69f7da17bfab2e5e) — 通知ルーティング用の配列を導入した、2005年4月の原因コミット

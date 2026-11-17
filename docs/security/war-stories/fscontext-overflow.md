@@ -1,44 +1,44 @@
-# The fs_context Legacy Parameter Overflow {#the-fs_context-legacy-parameter-overflow}
+# fs_contextのレガシーパラメータのオーバーフロー {#the-fs_context-legacy-parameter-overflow}
 
-> CVE-2022-0185 — a bounds check written as `PAGE_SIZE - 2 - size` in unsigned arithmetic let `unshare -Urm` plus a loop of `fsconfig()` calls write past the end of a 4 KB slab object, and turned Google's hardened Kubernetes CTF cluster into a $31,337 payout
+> CVE-2022-0185 — 符号なし算術で`PAGE_SIZE - 2 - size`と書かれた境界チェックにより、`unshare -Urm`と`fsconfig()`呼び出しのループで4 KBのslabオブジェクトの終端を越えて書き込めるようになり、Googleの強化されたKubernetes CTFクラスタを31,337ドルの報奨金に変えた
 
-Disclosed
-:   18 January 2022
+公開日
+:   2022年1月18日
 
-Reported by
-:   the Crusaders of Rust CTF team — Alec Petridis, Hrvoje Mišetić, Isaac Badipe, Jamie Hill-Daniel, Philip Papurt and William Liu — after independent discoveries by syzbot (31 December 2021, on an Android tree) and by StarLabs
+報告者
+:   CTFチームCrusaders of Rust — Alec Petridis、Hrvoje Mišetić、Isaac Badipe、Jamie Hill-Daniel、Philip Papurt、William Liu。これに先立ち、syzbot（2021年12月31日、Androidツリー上）とStarLabsがそれぞれ独立に発見していた
 
 CVSS
-:   8.4 HIGH (`CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`, NVD primary)
+:   8.4 HIGH（`CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`、NVDの主評価）
 
-Bug present since
-:   5.1-rc1 (2019)
+バグの存在期間
+:   5.1-rc1（2019年）以降
 
-Fixed in
-:   5.4.173, 5.10.93, 5.15.16, 5.16.2 (all 20 January 2022), mainline 5.17-rc1
+修正
+:   5.4.173、5.10.93、5.15.16、5.16.2（いずれも2022年1月20日）、メインライン5.17-rc1
 
-Exploit tool
-:   yes — two independent public exploits, no Exploit-DB or Metasploit entry
+エクスプロイトツール
+:   あり — 独立した2つの公開エクスプロイト。Exploit-DBやMetasploitのエントリはない
 
-Actively exploited
-:   yes — added to CISA's KEV catalog on 21 August 2024 (per [NVD](https://nvd.nist.gov/vuln/detail/CVE-2022-0185))
+実際の悪用
+:   あり — 2024年8月21日にCISAのKEVカタログに追加（[NVD](https://nvd.nist.gov/vuln/detail/CVE-2022-0185)による）
 
-*Part of [War Stories: Linux Security Bugs and CVEs](../war-stories.md).*
+*[事件簿: LinuxセキュリティのバグとCVE](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-Linux 5.1 shipped David Howells' filesystem context work, merged as [`3e1aeb00e6d1`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3e1aeb00e6d132efc151dacc062b38269bc9eccc) ("vfs: Implement a filesystem superblock creation/configuration context") — the `fs_context` infrastructure and `legacy_parse_param()`. Linux 5.2 then added the new mount API syscalls that actually drive it from userspace — `fsopen()`, `fsconfig()`, `fsmount()`, `move_mount()`. Instead of handing the kernel one opaque option string at `mount()` time, userspace now opens a *context* and feeds it parameters one at a time, each as a separate syscall.
+Linux 5.1は、David Howellsのファイルシステムコンテキストの作業を、[`3e1aeb00e6d1`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3e1aeb00e6d132efc151dacc062b38269bc9eccc)（"vfs: Implement a filesystem superblock creation/configuration context"）としてマージして出荷した。これが`fs_context`の基盤と`legacy_parse_param()`である。続いてLinux 5.2は、それを実際にユーザー空間から駆動する新しいマウントAPIのシステムコール、`fsopen()`、`fsconfig()`、`fsmount()`、`move_mount()`を追加した。`mount()`の時点で1つの不透明なオプション文字列をカーネルに渡す代わりに、ユーザー空間は*コンテキスト*を開き、パラメータを1つずつ、それぞれ別々のシステムコールとして渡すようになった。
 
-Almost no filesystem was converted to the new interface at once. Until the legacy path was deleted in 7.0, `alloc_fs_context()` carried Howells' original comment on the fallback:
+新しいインターフェースに一度に変換されたファイルシステムはほとんどなかった。レガシー経路が7.0で削除されるまで、`alloc_fs_context()`にはフォールバックについてのHowellsの元のコメントが残っていた:
 
 ```c
-/* TODO: Make all filesystems support this unconditionally */
+/* TODO: すべてのファイルシステムが無条件にこれをサポートするようにする */
 init_fs_context = fc->fs_type->init_fs_context;
 if (!init_fs_context)
     init_fs_context = legacy_init_fs_context;
 ```
 
-For every filesystem that had not implemented `init_fs_context` — ext4 among them, from 5.1 until its conversion in 5.17 — parameters flowed into `legacy_parse_param()` in `fs/fs_context.c`, whose job was to rebuild the comma-separated option string the old `->mount()` hook still expects. It accumulated that string in a single `kmalloc(PAGE_SIZE)` buffer, tracking how much it had written in `ctx->data_size`:
+`init_fs_context`を実装していないすべてのファイルシステム（5.1から5.17で変換されるまでのext4を含む）では、パラメータは`fs/fs_context.c`の`legacy_parse_param()`に流れ込んだ。その役割は、古い`->mount()`フックが依然として期待するカンマ区切りのオプション文字列を再構築することである。この関数はその文字列を単一の`kmalloc(PAGE_SIZE)`バッファに蓄積し、書き込んだ量を`ctx->data_size`で追跡していた:
 
 ```c
 static int legacy_parse_param(struct fs_context *fc, struct fs_parameter *param)
@@ -67,28 +67,28 @@ static int legacy_parse_param(struct fs_context *fc, struct fs_parameter *param)
 	ctx->data_size = size;
 ```
 
-The `- 2` reserves room for the separating comma and the trailing NUL (the `=` is already folded into `len` itself for string-valued params). `size` is an `unsigned int`; `PAGE_SIZE` is an unsigned long; `len` is a `size_t`. Every operand is converted to unsigned long before the subtraction runs, so the result can never be negative.
+`- 2`は区切りのカンマと末尾のNULのための領域を確保している（文字列値のパラメータでは、`=`はすでに`len`自体に含まれている）。`size`は`unsigned int`、`PAGE_SIZE`はunsigned long、`len`は`size_t`である。減算が実行される前にすべてのオペランドがunsigned longに変換されるため、結果は決して負にならない。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Each successful append advances `size` by `len + 1`, and the check permits `len <= PAGE_SIZE - 2 - size`. Run that arithmetic to its limit and `size` is allowed to reach exactly **4095** — one byte short of the buffer, with the NUL landing on the last valid byte. That is a legal, in-bounds state the check itself produces.
+追記が成功するたびに`size`は`len + 1`だけ進み、チェックは`len <= PAGE_SIZE - 2 - size`を許可する。この算術を限界まで進めると、`size`はちょうど**4095**に到達することが許される。バッファより1バイト少なく、NULは最後の有効なバイトに置かれる。これは、チェック自体が生み出す、正当で範囲内の状態である。
 
-On the next call, `PAGE_SIZE - 2 - size` evaluates to `4096 - 2 - 4095`. In unsigned arithmetic that is not `-1`; it is `ULONG_MAX`. No `len` can exceed it, the guard never fires, the comma store at `legacy_data[4095]` still lands in bounds, and the very next byte written, at offset 4096, is the first out-of-bounds write. Because `size` keeps growing, every subsequent `fsconfig()` call writes further past the end — a repeatable, attacker-positioned, attacker-contented heap write, bounded per call only by `fs/fsopen.c`'s `strndup_user(_key, 256)` and `strndup_user(_value, 256)` limits on key and value length respectively.
+次の呼び出しでは、`PAGE_SIZE - 2 - size`は`4096 - 2 - 4095`と評価される。符号なし算術では、これは`-1`ではなく`ULONG_MAX`である。どんな`len`もそれを超えられないので、ガードは決して発火しない。`legacy_data[4095]`へのカンマの書き込みはまだ範囲内に収まり、その次に書き込まれるバイト、オフセット4096が最初の範囲外書き込みになる。`size`は増え続けるので、以降の`fsconfig()`呼び出しはそのたびに終端をさらに越えて書き込む。繰り返し可能で、位置も内容も攻撃者が決められるヒープ書き込みであり、1回の呼び出しあたりの上限は、`fs/fsopen.c`の`strndup_user(_key, 256)`と`strndup_user(_value, 256)`によるキーと値それぞれの長さの制限だけである。
 
-Landing on 4095 exactly takes arithmetic, not luck. The discoverers' proof of concept uses an empty key and a 33-byte value, so each call adds `1 + 0 + 1 + 33 = 35` bytes; 117 calls put `data_size` at precisely `35 × 117 = 4095`:
+ちょうど4095に着地させるのに必要なのは運ではなく算術である。発見者たちのPoCは空のキーと33バイトの値を使うので、各呼び出しは`1 + 0 + 1 + 33 = 35`バイトを追加し、117回の呼び出しで`data_size`はぴったり`35 × 117 = 4095`になる:
 
 ```c
 fd = fsopen("ext4", 0);
 for (int i = 0; i < 117; i++)
 	fsconfig(fd, FSCONFIG_SET_STRING, "\x00", pat, 0);
-/* the 118th call writes out of bounds */
+/* 118回目の呼び出しが範囲外に書き込む */
 ```
 
-Reaching `fsopen()` at all requires `CAP_SYS_ADMIN` — but only in the user namespace that owns the caller's mount namespace (`ns_capable(current->nsproxy->mnt_ns->user_ns, CAP_SYS_ADMIN)`). As the [oss-security announcement](https://www.openwall.com/lists/oss-security/2022/01/18/7) put it: "An unprivileged user can use `unshare(CLONE_NEWNS|CLONE_NEWUSER)` to enter a namespace with the CAP_SYS_ADMIN permission, and then proceed with exploitation to root the system." On any distribution shipping unprivileged user namespaces — Ubuntu, Debian, and every container runtime that relies on them — the practical privilege requirement is none, which is why NVD scores this `PR:N` despite it being a local bug.
+そもそも`fsopen()`に到達するには`CAP_SYS_ADMIN`が必要である。ただしそれは、呼び出し元のマウント名前空間を所有するユーザー名前空間の中だけでよい（`ns_capable(current->nsproxy->mnt_ns->user_ns, CAP_SYS_ADMIN)`）。[oss-securityの告知](https://www.openwall.com/lists/oss-security/2022/01/18/7)が述べたとおりである:「An unprivileged user can use `unshare(CLONE_NEWNS|CLONE_NEWUSER)` to enter a namespace with the CAP_SYS_ADMIN permission, and then proceed with exploitation to root the system.」（訳: 非特権ユーザーは`unshare(CLONE_NEWNS|CLONE_NEWUSER)`を使ってCAP_SYS_ADMIN権限を持つ名前空間に入り、そこから悪用を進めてシステムのroot権限を奪取できる。）非特権ユーザー名前空間を提供するディストリビューション、つまりUbuntu、Debian、そしてそれに依存するすべてのコンテナランタイムでは、実質的な特権要件はない。ローカルのバグであるにもかかわらずNVDがこれを`PR:N`と評価しているのはそのためである。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The kernel-visible symptom is a KASAN slab-out-of-bounds write in the `kmalloc-4k` cache, as seen in the Crusaders of Rust fuzzing run that led to public disclosure:
+カーネルから見える症状は、`kmalloc-4k`キャッシュにおけるKASANのslab-out-of-bounds書き込みであり、公開につながったCrusaders of Rustのファジングで観測されたものは次のとおりである:
 
 ```
 BUG: KASAN: slab-out-of-bounds in legacy_parse_param+0x450/0x640 fs/fs_context.c:569
@@ -101,27 +101,27 @@ The buggy address is located 0 bytes to the right of
  4096-byte region [ffff88802d7d8000, ffff88802d7d9000)
 ```
 
-What made it a privilege-escalation bug rather than a crash is where that write lands. In [their writeup](https://www.willsroot.io/2022/01/cve-2022-0185.html), William Liu and the Crusaders of Rust describe placing a `msg_msg` object immediately after the legacy-data allocation, corrupting its size field, and using `MSG_COPY` to read out of bounds — leaking `seq_operations` pointers sprayed via `open("/proc/self/stat")` to defeat KASLR. For the arbitrary write in their Ubuntu exploit they needed to stall a `usercopy` mid-flight; with unprivileged `userfaultfd` disabled by default since 5.11, they used a FUSE filesystem of their own instead, whose read handler simply hangs, and finished by overwriting `modprobe_path`. Google's kCTF containers had a stripped `/dev` with no FUSE and no `userfaultfd`, so the escape exploit went after `pipe_buffer` instead. Unlinking a corrupted `msg_msg` to write the `pipe_buffer` ops pointer directly failed — `CONFIG_DEBUG_LIST` was on and `__list_del_entry_valid()` rejected the forged links — but `do_msgrcv()` still performs its frees when that check fails, giving an arbitrary-free primitive. Freeing the chunk holding the target `pipe_buffer` at a deliberately misaligned address and spraying `msg_msg` objects over it let them point the ops pointer at a stack-pivot gadget and ROP through `commit_creds(prepare_kernel_cred(NULL))` and `switch_task_namespaces(find_task_by_vpid(1), init_nsproxy)` — dropping the container's `init` into the host's namespaces, with a final `setns()` completing the escape.
+これをクラッシュではなく権限昇格のバグにしたのは、その書き込みがどこに着地するかである。[彼らの解説記事](https://www.willsroot.io/2022/01/cve-2022-0185.html)で、William LiuとCrusaders of Rustは、レガシーデータの割り当ての直後に`msg_msg`オブジェクトを配置し、そのサイズフィールドを破壊し、`MSG_COPY`を使って範囲外を読み出す方法を説明している。これにより`open("/proc/self/stat")`でスプレーした`seq_operations`のポインタを漏洩させ、KASLRを破る。Ubuntu向けエクスプロイトでの任意書き込みのために、彼らは`usercopy`を途中で停止させる必要があった。5.11以降、非特権の`userfaultfd`はデフォルトで無効になっているため、代わりに自前のFUSEファイルシステムを使い、その読み込みハンドラを単にハングさせた。そして最後に`modprobe_path`を上書きした。GoogleのkCTFコンテナは`/dev`が削ぎ落とされていてFUSEも`userfaultfd`もなかったため、脱出用のエクスプロイトは代わりに`pipe_buffer`を狙った。破壊した`msg_msg`をリストから外して`pipe_buffer`のopsポインタに直接書き込もうとする試みは失敗した。`CONFIG_DEBUG_LIST`が有効で、`__list_del_entry_valid()`が偽造したリンクを拒否したからである。しかし`do_msgrcv()`はそのチェックが失敗しても解放処理を行うため、任意解放のプリミティブが得られた。標的の`pipe_buffer`を含むチャンクを意図的にずらしたアドレスで解放し、その上に`msg_msg`オブジェクトをスプレーすることで、opsポインタをスタックピボットのガジェットに向け、`commit_creds(prepare_kernel_cred(NULL))`と`switch_task_namespaces(find_task_by_vpid(1), init_nsproxy)`をROPで実行できた。これによりコンテナの`init`をホストの名前空間に移し、最後の`setns()`で脱出を完了した。
 
-The writeup notes an irony worth recording: an anti-exploitation hardening change made the exploit *more* reliable. Because SLUB has stored its freelist pointer in the middle of each object rather than at its start since 5.7, a string-shaped overflow through the first `0x30` bytes of the following chunk — exactly the region `msg_msg` cares about — no longer corrupts slab metadata, so the overflow could be repeated with a fresh `fsopen()` context until it succeeded.
+解説記事は、記録しておく価値のある皮肉を指摘している。悪用対策のハードニング変更が、エクスプロイトを*より*確実にしたのである。5.7以降、SLUBはフリーリストのポインタを各オブジェクトの先頭ではなく中央に格納しているため、次のチャンクの最初の`0x30`バイト、まさに`msg_msg`が気にする領域を通る文字列状のオーバーフローは、もはやslabのメタデータを破壊しない。そのため、成功するまで新しい`fsopen()`コンテキストでオーバーフローを繰り返すことができた。
 
-They used it to escape Google's hardened kCTF Kubernetes containers and read another pod's flag, earning a $31,337 bounty — reduced from the maximum because a researcher going by n0psledbyte had found the same bug earlier without properly reporting or disclosing it, a collision Crusaders of Rust learned about only after their own report. A week later, Alejandro Guerrero [published an independent exploit](https://www.openwall.com/lists/oss-security/2022/01/25/14) on oss-security targeting Ubuntu 21.04 with kernel 5.11. Two and a half years after that, CISA added CVE-2022-0185 to its Known Exploited Vulnerabilities catalog (21 August 2024), confirmed via [NVD](https://nvd.nist.gov/vuln/detail/CVE-2022-0185), whose SSVC data records its exploitation status as **active**. There is no Exploit-DB entry and no Metasploit module; the [Crusaders of Rust repository](https://github.com/Crusaders-of-Rust/CVE-2022-0185) — created 19 January 2022, with the working exploits published 25 January — is the exploit distribution channel, and NVD tags it as such.
+彼らはこれを使ってGoogleの強化されたkCTF Kubernetesコンテナから脱出し、別のpodのフラグを読み取って、31,337ドルの報奨金を得た。最高額から減額されたのは、n0psledbyteと名乗る研究者が同じバグを先に見つけていながら、適切に報告も公開もしていなかったためであり、Crusaders of Rustはその重複を自分たちの報告の後で初めて知った。1週間後、Alejandro Guerreroは、カーネル5.11のUbuntu 21.04を標的とする[独立したエクスプロイトを](https://www.openwall.com/lists/oss-security/2022/01/25/14)oss-securityで公開した。その2年半後、CISAはCVE-2022-0185を既知の悪用された脆弱性（KEV）カタログに追加した（2024年8月21日）。これは[NVD](https://nvd.nist.gov/vuln/detail/CVE-2022-0185)で確認でき、そのSSVCデータは悪用状況を**active**と記録している。Exploit-DBのエントリもMetasploitモジュールもない。2022年1月19日に作成され、動作するエクスプロイトが1月25日に公開された[Crusaders of Rustのリポジトリ](https://github.com/Crusaders-of-Rust/CVE-2022-0185)がエクスプロイトの配布経路であり、NVDもそのようにタグ付けしている。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The check is not missing. It is the right check, computed in the wrong direction. `len > PAGE_SIZE - 2 - size` asks "does this parameter fit in the remaining space?" by first computing the remaining space — and *computing the remainder* is precisely the step that can go wrong when the types are unsigned. `size + len + 2 > PAGE_SIZE` asks the same question without ever forming a value that could underflow.
+チェックが欠けていたわけではない。正しいチェックを、間違った方向に計算していたのである。`len > PAGE_SIZE - 2 - size`は、まず残りの空き領域を計算することで「このパラメータは残りの領域に収まるか？」を問う。そして*残りを計算すること*こそが、型が符号なしの場合に誤りうる手順である。`size + len + 2 > PAGE_SIZE`は、アンダーフローしうる値を一度も作らずに同じ問いを問う。
 
-What makes it more than a textbook underflow is that the guard's own success condition walks `size` to the value at which the guard breaks. There is no illegal input needed to set up the bug: 117 perfectly valid `fsconfig()` calls, each of which the check correctly accepts, leave the context in the one state where the 118th call is unchecked. The invariant the check actually maintained (`size <= PAGE_SIZE - 1`) and the invariant its own arithmetic needed (`size <= PAGE_SIZE - 2`) were off by exactly one reachable step.
+これを教科書的なアンダーフロー以上のものにしているのは、ガード自身の成功条件が、`size`をガードが壊れる値まで進めてしまうことである。バグを仕込むのに不正な入力は必要ない。チェックがそれぞれ正しく受け入れる、117回の完全に正当な`fsconfig()`呼び出しが、118回目の呼び出しがチェックされない唯一の状態にコンテキストを残す。チェックが実際に維持していた不変条件（`size <= PAGE_SIZE - 1`）と、チェック自身の算術が必要としていた不変条件（`size <= PAGE_SIZE - 2`）は、ちょうど到達可能な1ステップ分ずれていた。
 
-The exposure was also much wider than "one legacy code path." `legacy_parse_param()` dates from 2018 as a compatibility shim, written when the only way to reach it was `mount()` with a monolithic option string. The 5.2 mount-API syscalls gave userspace a way to drive that shim one parameter at a time, with byte-level control over the accumulated length — a granularity the original code was never designed to be fed. Three years passed with nobody noticing; then two fuzzers found it six days apart. As Liu observed in his own comments, "It was interesting to see how both of our fuzzer and syzbot's found this bug a few days apart in 2022 while the bug existed since 2019 — perhaps some recent change in either the kernel or syzkaller made it easier to trigger."
+影響範囲も「1つのレガシーなコードパス」よりはるかに広かった。`legacy_parse_param()`は2018年に互換性のためのシムとして書かれたもので、当時それに到達する唯一の方法は、一枚岩のオプション文字列を伴う`mount()`だった。5.2のマウントAPIのシステムコールは、ユーザー空間にそのシムをパラメータ1つずつ、蓄積される長さをバイト単位で制御しながら駆動する手段を与えた。元のコードは、そのような粒度で入力を与えられることを想定して設計されていなかった。誰も気づかないまま3年が過ぎ、その後2つのファザーが6日違いでそれを見つけた。Liu自身がコメントで述べたとおりである:「It was interesting to see how both of our fuzzer and syzbot's found this bug a few days apart in 2022 while the bug existed since 2019 — perhaps some recent change in either the kernel or syzkaller made it easier to trigger.」（訳: バグは2019年から存在していたのに、2022年に私たちのファザーとsyzbotのファザーの両方が数日違いでこのバグを見つけたのは興味深かった。カーネルかsyzkallerのどちらかの最近の変更が、引き起こしやすくしたのかもしれない。）
 
-"Nobody noticing" isn't quite right, though — someone looked at this exact function's arithmetic and fixed a line in the same short function, three and a half years before the CVE. In August 2018, while `legacy_parse_param()` was still under development on David Howells' branch, Andrei Vagin [posted a one-line fix](https://lore.kernel.org/linux-fsdevel/20180802072810.3126-1-avagin@openvz.org/) a handful of statements below the faulty guard, to the last line that advances `size`: `size += len;` should have been `size += param->size;`, since `len` had been reassigned to the *key* length a few lines earlier and no longer described the value being copied. Howells folded it in the same day. That patch touched the accumulator the underflow depends on and still missed the underflow — a second illustration of the same lesson this bug already teaches: reviewing one line of a length calculation correctly says nothing about whether the check bounding it is sound.
+ただし「誰も気づかなかった」というのは正確ではない。CVEの3年半前に、ある人物がまさにこの関数の算術を見て、同じ短い関数の中の1行を修正している。2018年8月、`legacy_parse_param()`がまだDavid Howellsのブランチで開発中だった頃、Andrei Vaginは、欠陥のあるガードの数文下、`size`を進める最後の行に対する[1行の修正を投稿した](https://lore.kernel.org/linux-fsdevel/20180802072810.3126-1-avagin@openvz.org/)。`size += len;`は`size += param->size;`であるべきだった。`len`は数行前に*キー*の長さに再代入されており、もはやコピーされる値を表していなかったからである。Howellsは同じ日にそれを取り込んだ。そのパッチはアンダーフローが依存する累積値に触れていながら、アンダーフローを見逃した。これは、このバグがすでに教えている教訓の2つ目の例である。長さ計算の1行を正しくレビューしても、それを制限するチェックが健全かどうかについては何も分からない。
 
-A separate find, earlier than the Crusaders of Rust's, is the uncomfortable part. [syzbot reported it on 31 December 2021](https://groups.google.com/g/syzkaller-android-bugs/c/hWixpJ22kc8/m/MrIgyhQvEAAJ) — subject "KASAN: slab-out-of-bounds Write in legacy_parse_param", bug ID `02b637bea12b3944b0b9`, a distinct crash in the same function (`fs/fs_context.c:603` on the `android12-5.4` tree, rather than the CoR run's `fs/fs_context.c:569` on 5.14) and with syz and C reproducers that syzbot posted to the same thread fifteen minutes later. It landed on `syzkaller-android-bugs`, not on a VFS list, and no human replied until Lee Jones posted the already-public upstream fix to the thread on 26 January 2022 — eight days after the CVE was announced.
+Crusaders of Rustより早い別の発見こそが、居心地の悪い部分である。[syzbotは2021年12月31日にこれを報告していた](https://groups.google.com/g/syzkaller-android-bugs/c/hWixpJ22kc8/m/MrIgyhQvEAAJ)。件名は"KASAN: slab-out-of-bounds Write in legacy_parse_param"、バグIDは`02b637bea12b3944b0b9`で、同じ関数における別のクラッシュ（CoRの実行での5.14上の`fs/fs_context.c:569`ではなく、`android12-5.4`ツリー上の`fs/fs_context.c:603`）であり、syzbotは15分後に同じスレッドにsyzとCの再現プログラムを投稿していた。それはVFSのリストではなく`syzkaller-android-bugs`に投稿され、CVEの告知から8日後の2022年1月26日にLee Jonesがすでに公開されていたアップストリームの修正をスレッドに投稿するまで、人間は誰も返信しなかった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-[`722d94847de2`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=722d94847de29310e8aa03fcbdb41fc92c521756) ("vfs: fs_context: fix up param length parsing in legacy_parse_param"), authored by Jamie Hill-Daniel on 18 January 2022, is a one-line change:
+2022年1月18日にJamie Hill-Danielが作成した[`722d94847de2`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=722d94847de29310e8aa03fcbdb41fc92c521756)（"vfs: fs_context: fix up param length parsing in legacy_parse_param"）は、1行の変更である:
 
 ```c
 -	if (len > PAGE_SIZE - 2 - size)
@@ -129,49 +129,49 @@ A separate find, earlier than the Crusaders of Rust's, is the uncomfortable part
 		return invalf(fc, "VFS: Legacy: Cumulative options too large");
 ```
 
-Its commit message states the rule plainly: "The 'PAGE_SIZE - 2 - size' calculation in legacy_parse_param() is an unsigned type so a large value of 'size' results in a high positive value instead of a negative value as expected. Fix this by getting rid of the subtraction."
+そのコミットメッセージは規則をはっきりと述べている:「The 'PAGE_SIZE - 2 - size' calculation in legacy_parse_param() is an unsigned type so a large value of 'size' results in a high positive value instead of a negative value as expected. Fix this by getting rid of the subtraction.」（訳: legacy_parse_param()の'PAGE_SIZE - 2 - size'の計算は符号なし型なので、'size'の値が大きいと、期待どおりの負の値ではなく大きな正の値になる。減算をなくすことでこれを修正する。）
 
-The trailers are the interesting part. The patch carries `Signed-off-by` from Hill-Daniel and William Liu, `Tested-by` from Salvatore Bonaccorso (Debian) and Thadeu Lima de Souza Cascardo (Canonical), and `Acked-by` from both Dan Carpenter and Al Viro, before Greg Kroah-Hartman's and Linus Torvalds' sign-offs. That is a distribution-security review chain, not a public mailing-list one — and it shows: **there is no pre-merge upstream submission or review thread for this patch.** The commit has no `Link:` trailer, and it was never posted to linux-fsdevel or LKML for design discussion before landing. The bug was reported privately (Red Hat's [Bugzilla 2040358](https://bugzilla.redhat.com/show_bug.cgi?id=2040358) was filed on 13 January 2022), reviewed under embargo, and pushed straight to mainline on the day of public disclosure. The public discussion happened elsewhere: the [oss-security announcement](https://www.openwall.com/lists/oss-security/2022/01/18/7) on 18 January, John Haxby's reply the same hour assigning CVE-2022-0185, and Guerrero's exploit post a week later. The only place the fix itself later surfaces on a mailing list is downstream: as one of twenty-eight patches in Greg Kroah-Hartman's 5.16.2-rc1 stable-review series. Anyone reconstructing this fix's *design* history from lore alone will find only that stable-review posting and its sibling backports.
+興味深いのはトレーラーである。このパッチには、Hill-DanielとWilliam Liuの`Signed-off-by`、Salvatore Bonaccorso（Debian）とThadeu Lima de Souza Cascardo（Canonical）の`Tested-by`、Dan CarpenterとAl Viroの両者の`Acked-by`が付き、その後にGreg Kroah-HartmanとLinus Torvaldsのサインオフが続く。これは公開メーリングリストのレビューの連鎖ではなく、ディストリビューションのセキュリティレビューの連鎖であり、それははっきり表れている。**このパッチには、マージ前のアップストリームへの投稿もレビュースレッドも存在しない**。コミットには`Link:`トレーラーがなく、取り込まれる前に設計の議論のためにlinux-fsdevelやLKMLに投稿されたことは一度もない。バグは非公開で報告され（Red Hatの[Bugzilla 2040358](https://bugzilla.redhat.com/show_bug.cgi?id=2040358)は2022年1月13日に起票された）、エンバーゴ下でレビューされ、公開の当日にそのままメインラインに投入された。公開の議論は別の場所で行われた。1月18日の[oss-securityの告知](https://www.openwall.com/lists/oss-security/2022/01/18/7)、同じ時間帯にCVE-2022-0185を割り当てたJohn Haxbyの返信、そして1週間後のGuerreroのエクスプロイト投稿である。修正そのものが後にメーリングリストに現れる唯一の場所は下流である。Greg Kroah-Hartmanの5.16.2-rc1のstableレビューシリーズに含まれる28パッチのうちの1つとしてである。この修正の*設計*の経緯をloreだけから再構成しようとする人は、そのstableレビューの投稿と、兄弟のバックポートしか見つけられない。
 
-Those backports were fast: 5.4.173, 5.10.93, 5.15.16 and 5.16.2 were all released on 20 January 2022, two days after disclosure, all four carrying the fix. Operators who could not reboot immediately had one real mitigation, since the bug is unreachable without a namespace granting `CAP_SYS_ADMIN`:
+それらのバックポートは速かった。5.4.173、5.10.93、5.15.16、5.16.2はすべて、公開の2日後の2022年1月20日にリリースされ、4つすべてに修正が含まれていた。すぐに再起動できない運用者には、本当の緩和策が1つあった。このバグは`CAP_SYS_ADMIN`を与える名前空間なしでは到達できないからである:
 
 ```bash
-# Debian/Ubuntu-style knob: 0 blocks unprivileged user namespace creation
+# Debian/Ubuntu系のノブ: 0にすると非特権ユーザー名前空間の作成をブロックする
 sysctl kernel.unprivileged_userns_clone
-# Upstream since 4.9; a hard cap on how many userns any user may create
+# 4.9以降アップストリームにある: 任意のユーザーが作成できるuserns数の固い上限
 sysctl user.max_user_namespaces
 ```
 
-Both break rootless containers and anything else that legitimately unshares a user namespace, which is exactly the trade-off container platforms spent early 2022 arguing about.
+どちらもrootlessコンテナや、正当にユーザー名前空間をunshareするその他のものを壊す。それこそが、コンテナプラットフォームが2022年の初めに議論を重ねたトレードオフである。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**Write bounds checks as sums, never as differences.** `a + b > LIMIT` and `b > LIMIT - a` are equivalent in mathematics and are not equivalent in C. Any check whose left-hand side subtracts an attacker-influenced quantity from a constant is one large input away from being a no-op, and no amount of care about the *comparison* helps if the *subtraction* is where the truth is lost.
+**境界チェックは差ではなく和として書くこと**。`a + b > LIMIT`と`b > LIMIT - a`は数学的には等価だが、Cでは等価ではない。左辺で定数から攻撃者が影響を与えられる量を引くチェックはすべて、大きな入力1つで何もしないものになりうる。そして真実が失われるのが*減算*である以上、*比較*にどれだけ注意を払っても役に立たない。
 
-**A guard that lets its own precondition be reached is not a guard.** The check permitted `size` to grow to exactly the value at which it stopped working. Bugs of this shape survive review because every individual step looks correct — the failure only exists in the sequence, and reviewers read functions, not sequences.
+**自身の前提条件の破れに到達することを許すガードはガードではない**。このチェックは、`size`がまさにチェックが機能しなくなる値まで増えることを許していた。この形のバグがレビューをすり抜けるのは、個々のステップがすべて正しく見えるからである。失敗は連続した操作の中にしか存在せず、レビュアーが読むのは関数であって、操作の連続ではない。
 
-**A new syscall can weaponize old code without changing a line of it.** `legacy_parse_param()` was as correct in 5.1 as in 5.2; what changed was that `fsconfig()` let an attacker drive it 35 bytes at a time instead of handing it one string. When you add a finer-grained interface to an existing subsystem, the compatibility shim behind it is now reachable in ways its author never modelled.
+**新しいシステムコールは、古いコードを1行も変えずに武器に変えることができる**。`legacy_parse_param()`は5.1でも5.2でも同じように正しかった。変わったのは、`fsconfig()`によって、攻撃者が1つの文字列を渡す代わりに35バイトずつそれを駆動できるようになったことである。既存のサブシステムにより細かい粒度のインターフェースを追加すると、その背後にある互換性のためのシムは、作者が想定しなかった方法で到達可能になる。
 
-**"Requires CAP_SYS_ADMIN" stopped being a mitigating factor around 2013.** NVD scored this bug `PR:N` — privileges required, none — for a code path explicitly gated on the most powerful capability Linux has, because `unshare -Urm` hands that capability to any user on a default Ubuntu install. Severity triage that reads capability checks as trust boundaries will systematically under-rate this whole class of bug.
+**「CAP_SYS_ADMINが必要」は2013年頃に緩和要因ではなくなった**。NVDはこのバグを`PR:N`（必要な特権: なし）と評価した。Linuxで最も強力なケイパビリティで明示的にゲートされたコードパスであるにもかかわらずである。デフォルトのUbuntuインストールでは、`unshare -Urm`が任意のユーザーにそのケイパビリティを与えるからである。ケイパビリティのチェックを信頼境界として読む深刻度のトリアージは、この種のバグ全体を系統的に過小評価することになる。
 
-!!! warning "Pattern to watch for"
-    Grep your own code for bounds checks of the form `LIMIT - x - y` where any operand is unsigned and attacker-influenced — `PAGE_SIZE - hdr - len`, `sizeof(buf) - offset`, `count - consumed`. Each is a candidate for the same rewrite. Then check the second half of the pattern: whether repeated *valid* operations can walk the accumulator to the boundary value. On the operational side, treat every `fsopen()`/`fsconfig()`-reachable path, and every `CAP_SYS_ADMIN`-gated one, as unprivileged-reachable unless you have explicitly disabled unprivileged user namespaces.
+!!! warning "注意すべきパターン"
+    自分のコードで、いずれかのオペランドが符号なしで攻撃者の影響を受ける`LIMIT - x - y`形式の境界チェック、たとえば`PAGE_SIZE - hdr - len`、`sizeof(buf) - offset`、`count - consumed`をgrepすること。いずれも同じ書き換えの候補である。次にパターンの後半をチェックすること。つまり、*正当な*操作を繰り返すことで累積値を境界の値まで進められるかどうかである。運用面では、非特権ユーザー名前空間を明示的に無効にしていない限り、`fsopen()`/`fsconfig()`から到達可能なすべての経路、そして`CAP_SYS_ADMIN`でゲートされたすべての経路を、非特権で到達可能なものとして扱うこと。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [User Namespaces and Credential Mapping](../user-namespaces.md) — how `unshare(CLONE_NEWUSER)` grants a full capability set inside the new namespace, the mechanism this exploit depends on entirely
-- [Linux Capabilities](../capabilities.md) — including why `CAP_SYS_ADMIN` in particular is the capability that keeps showing up in escalation chains
-- [Filesystem Registration and Mounting](../../vfs/mounting.md) — `struct fs_context`, `init_fs_context()`, and the mount path this bug lives in
-- [Kernel Hardening](../kernel-hardening.md) — KASLR, hardened usercopy and SMAP/SMEP, all of which the published exploits had to work around
+- [ユーザー名前空間とクレデンシャルのマッピング](../user-namespaces.md) — `unshare(CLONE_NEWUSER)`が新しい名前空間の中で完全なケイパビリティセットを与える仕組み。このエクスプロイトは完全にこれに依存している
+- [Linuxケイパビリティ](../capabilities.md) — とりわけ`CAP_SYS_ADMIN`が権限昇格の連鎖に繰り返し現れるケイパビリティである理由を含む
+- [ファイルシステムの登録とマウント](../../vfs/mounting.md) — `struct fs_context`、`init_fs_context()`、そしてこのバグが存在するマウント経路
+- [カーネルハードニング](../kernel-hardening.md) — KASLR、hardened usercopy、SMAP/SMEP。公開されたエクスプロイトはそのすべてを回避する必要があった
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [NVD: CVE-2022-0185](https://nvd.nist.gov/vuln/detail/CVE-2022-0185) — CVSS 8.4 HIGH, affected ranges, and the references NVD tags as `Exploit`; confirms the CISA KEV listing, added 21 August 2024, CWE-190, with an 11 September 2024 remediation due date for federal agencies
-- [git.kernel.org: 722d94847de2](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=722d94847de29310e8aa03fcbdb41fc92c521756) — "vfs: fs_context: fix up param length parsing in legacy_parse_param", the one-line fix and its review trailers
-- [git.kernel.org: 3e1aeb00e6d1](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3e1aeb00e6d132efc151dacc062b38269bc9eccc) — David Howells' filesystem-context series, which introduced `legacy_parse_param()` in 5.1-rc1
-- [oss-security: Linux kernel: Heap buffer overflow in fs_context.c since version 5.1](https://www.openwall.com/lists/oss-security/2022/01/18/7) — the 18 January 2022 disclosure by William Liu, with the underflow analysis and the `unshare` requirement
-- [oss-security: CVE-2022-0185: Linux kernel slab out-of-bounds write: exploit and writeup](https://www.openwall.com/lists/oss-security/2022/01/25/14) — Alejandro Guerrero's independent exploit for Ubuntu 21.04, and the full credit list for the discovery
-- [Will's Root: CVE-2022-0185 — Winning a $31337 Bounty after Pwning Ubuntu and Escaping Google's KCTF Containers](https://www.willsroot.io/2022/01/cve-2022-0185.html) — the discoverers' primary writeup: syzkaller setup, `msg_msg` and FUSE technique, and the kCTF container escape
-- [GitHub: Crusaders-of-Rust/CVE-2022-0185](https://github.com/Crusaders-of-Rust/CVE-2022-0185) — the published exploits, including `exploit_kctf.c`
-- [syzkaller-android-bugs: KASAN: slab-out-of-bounds Write in legacy_parse_param](https://groups.google.com/g/syzkaller-android-bugs/c/hWixpJ22kc8/m/MrIgyhQvEAAJ) — syzbot's 31 December 2021 report against `android12-5.4`, unanswered until after public disclosure
-- [Red Hat Bugzilla 2040358](https://bugzilla.redhat.com/show_bug.cgi?id=2040358) — the private vendor report, filed 13 January 2022
+- [NVD: CVE-2022-0185](https://nvd.nist.gov/vuln/detail/CVE-2022-0185) — CVSS 8.4 HIGH、影響を受ける範囲、NVDが`Exploit`とタグ付けした参照。2024年8月21日に追加されたCISA KEVへの掲載、CWE-190、連邦機関向けの是正期限2024年9月11日を確認できる
+- [git.kernel.org: 722d94847de2](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=722d94847de29310e8aa03fcbdb41fc92c521756) — "vfs: fs_context: fix up param length parsing in legacy_parse_param"。1行の修正とそのレビュートレーラー
+- [git.kernel.org: 3e1aeb00e6d1](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3e1aeb00e6d132efc151dacc062b38269bc9eccc) — David Howellsのファイルシステムコンテキストのシリーズ。5.1-rc1で`legacy_parse_param()`を導入した
+- [oss-security: Linux kernel: Heap buffer overflow in fs_context.c since version 5.1](https://www.openwall.com/lists/oss-security/2022/01/18/7) — William Liuによる2022年1月18日の公開。アンダーフローの分析と`unshare`の要件を含む
+- [oss-security: CVE-2022-0185: Linux kernel slab out-of-bounds write: exploit and writeup](https://www.openwall.com/lists/oss-security/2022/01/25/14) — Alejandro GuerreroによるUbuntu 21.04向けの独立したエクスプロイトと、発見に関する完全なクレジット一覧
+- [Will's Root: CVE-2022-0185 — Winning a $31337 Bounty after Pwning Ubuntu and Escaping Google's KCTF Containers](https://www.willsroot.io/2022/01/cve-2022-0185.html) — 発見者による一次の解説記事。syzkallerの設定、`msg_msg`とFUSEの手法、kCTFコンテナからの脱出
+- [GitHub: Crusaders-of-Rust/CVE-2022-0185](https://github.com/Crusaders-of-Rust/CVE-2022-0185) — 公開されたエクスプロイト。`exploit_kctf.c`を含む
+- [syzkaller-android-bugs: KASAN: slab-out-of-bounds Write in legacy_parse_param](https://groups.google.com/g/syzkaller-android-bugs/c/hWixpJ22kc8/m/MrIgyhQvEAAJ) — `android12-5.4`に対するsyzbotの2021年12月31日の報告。公開後まで返信がなかった
+- [Red Hat Bugzilla 2040358](https://bugzilla.redhat.com/show_bug.cgi?id=2040358) — 非公開のベンダー報告、2022年1月13日起票

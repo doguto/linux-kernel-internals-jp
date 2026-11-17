@@ -1,25 +1,25 @@
-# PSI Polling: A Waitqueue That Outlived the cgroup That Owned It {#psi-polling-a-waitqueue-that-outlived-the-cgroup-that-owned-it}
+# PSIポーリング: 所有者のcgroupより長生きした待ちキュー {#psi-polling-a-waitqueue-that-outlived-the-cgroup-that-owned-it}
 
-> CVE-2023-52707 — a pressure-monitoring waitqueue was freed the moment its cgroup was removed, but a thread still polling the pressure file kept a reference to it and could dereference the freed memory on exit
+> CVE-2023-52707 — プレッシャー監視用の待ちキューはcgroupが削除された瞬間に解放されていたが、プレッシャーファイルをまだポーリングしているスレッドがそれへの参照を保持しており、終了時に解放済みメモリを参照外しする可能性があった
 
-Fixed in
-:   commit `c2dbe32d5db5` ("sched/psi: Fix use-after-free in ep_remove_wait_queue()"), mainline Linux 6.2 (February 2023)
+修正
+:   コミット `c2dbe32d5db5`（"sched/psi: Fix use-after-free in ep_remove_wait_queue()"）、メインラインLinux 6.2（2023年2月）
 
-Found and fixed by
-:   Munehisa Kamata (Amazon)
+発見・修正
+:   Munehisa Kamata（Amazon）
 
-Bug present since
-:   Linux 5.2, via commit `0e94682b73bf`
+バグの存在期間
+:   Linux 5.2以降、コミット `0e94682b73bf` による
 
-*Part of [War Stories: Scheduler Bugs](../war-stories.md).*
+*[事件簿: スケジューラのバグ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-Pressure Stall Information (PSI) lets a process register a trigger on a cgroup's `cpu.pressure`, `memory.pressure`, or `io.pressure` file and poll (or `epoll`) it for notification when pressure crosses a threshold. Each trigger owns a waitqueue that `epoll`'s internal bookkeeping (`struct eventpoll`) attaches to via the file it opened, following the normal `epoll` lifecycle: the waitqueue is expected to remain valid for as long as any `epoll` instance still references the file, and gets detached and released as part of that file eventually being closed.
+Pressure Stall Information（PSI）では、プロセスがcgroupの `cpu.pressure`、`memory.pressure`、`io.pressure` ファイルにトリガーを登録し、プレッシャーがしきい値を超えたときの通知を受けるためにそれをpoll（または `epoll`）できる。各トリガーは待ちキューを所有しており、`epoll` の内部管理構造（`struct eventpoll`）は開いたファイルを介してそこにアタッチする。これは通常の `epoll` のライフサイクルに従う。つまり待ちキューは、いずれかの `epoll` インスタンスがそのファイルを参照している限り有効であり続けることが期待され、そのファイルが最終的にクローズされる過程で切り離され解放される。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Removing a non-root cgroup while a thread is still polling one of its pressure files takes a different teardown path than closing the file normally:
+スレッドがまだプレッシャーファイルの1つをポーリングしている間に非ルートcgroupを削除すると、ファイルを通常どおりクローズする場合とは異なる破棄パスを通る。
 
 ```
 do_rmdir
@@ -30,11 +30,11 @@ do_rmdir
           psi_trigger_destroy
 ```
 
-`psi_trigger_destroy()` frees the trigger's waitqueue as part of tearing down the cgroup, regardless of whether any process still has the pressure file open and registered with `epoll`. The polling thread's file descriptor is still valid and its `epoll` registration is still live — it just now points at freed memory.
+`psi_trigger_destroy()` は、cgroupの破棄の一環としてトリガーの待ちキューを解放する。どこかのプロセスがまだプレッシャーファイルを開いて `epoll` に登録しているかどうかは関係ない。ポーリングしているスレッドのファイルディスクリプタはまだ有効であり、その `epoll` 登録もまだ生きている。ただ、今や解放済みメモリを指しているだけである。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-When the polling thread later closes the file, or exits and its file descriptors are cleaned up, `epoll`'s own release path runs:
+後でポーリングスレッドがファイルをクローズするか、終了してファイルディスクリプタが後始末されると、`epoll` 自身の解放パスが実行される。
 
 ```
 fput
@@ -44,31 +44,31 @@ fput
         remove_wait_queue
 ```
 
-`ep_remove_wait_queue()` dereferences the waitqueue that `cgroup_rmdir()` had already freed when the cgroup was removed — a straightforward use-after-free, reachable by an unprivileged process that only needs permission to poll a pressure file in a cgroup someone else (or something else) later removes.
+`ep_remove_wait_queue()` は、cgroupの削除時に `cgroup_rmdir()` がすでに解放した待ちキューを参照外しする。これは単純なuse-after-freeであり、非特権プロセスから到達可能である。必要なのは、後で誰か（あるいは何か）によって削除されるcgroupのプレッシャーファイルをポーリングする権限だけである。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The root problem, as the fixing commit states directly, is that `cgroup_file_release()` — and by extension the pressure trigger's waitqueue lifetime — was never tied to the underlying file's actual lifetime. `epoll`'s contract assumes a waitqueue registered against an open file descriptor stays valid until that descriptor's own `struct file` is released; PSI's pressure-trigger waitqueue instead followed the cgroup's removal lifecycle, an entirely separate and earlier event that `epoll` had no way to know about or wait for.
+修正コミットが直接述べているとおり、根本的な問題は、`cgroup_file_release()`（ひいてはプレッシャートリガーの待ちキューの寿命）が、背後にあるファイルの実際の寿命に結び付けられていなかったことである。`epoll` の契約は、開いているファイルディスクリプタに対して登録された待ちキューは、そのディスクリプタ自身の `struct file` が解放されるまで有効であり続けると仮定している。PSIのプレッシャートリガーの待ちキューは代わりにcgroupの削除ライフサイクルに従っていた。これはまったく別の、より早いイベントであり、`epoll` にはそれを知る方法も待つ方法もなかった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-The correct fix — making `cgroup_file_release()`'s timing genuinely match the file's real lifetime — would have required non-trivial refactoring at the cgroup or kernfs layer. Instead, the fix uses `wake_up_pollfree()`, a helper added specifically for this class of problem (per its introducing commit, `42288cb44c4b`): call it from `psi_trigger_destroy()` before freeing the waitqueue, so any still-registered `epoll` watcher is woken and detaches itself cleanly at cgroup-removal time, rather than being left holding a dangling reference to be discovered later on close.
+正しい修正、つまり `cgroup_file_release()` のタイミングをファイルの本当の寿命に真に一致させることは、cgroupまたはkernfsレイヤーで自明でないリファクタリングを必要としただろう。代わりに修正は `wake_up_pollfree()` を使う。これはまさにこの種の問題のために追加されたヘルパーである（導入コミット `42288cb44c4b` による）。待ちキューを解放する前に `psi_trigger_destroy()` からこれを呼ぶことで、まだ登録されている `epoll` のウォッチャーはcgroup削除時に起こされて自らをきれいに切り離す。後でクローズ時に発見されるダングリング参照を保持したまま放置されることはなくなる。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A subsystem that participates in another subsystem's lifecycle contract has to honor that contract exactly, even when its own natural teardown path is different.** PSI triggers are cgroup-scoped and get torn down when the cgroup goes away; `epoll` waitqueues are file-scoped and expect to survive until the file itself is released. Bridging the two correctly means recognizing that "the cgroup is gone" and "the file is closed" are genuinely different events that can happen in either order — not treating the earlier one as if it also means the latter.
+**別のサブシステムのライフサイクル契約に参加するサブシステムは、自身の自然な破棄パスが異なっていても、その契約を正確に守らなければならない。** PSIトリガーはcgroupスコープであり、cgroupがなくなると破棄される。`epoll` の待ちキューはファイルスコープであり、ファイル自体が解放されるまで生き残ることを期待している。両者を正しく橋渡しするには、「cgroupがなくなった」と「ファイルがクローズされた」は本当に異なるイベントであり、どちらの順序でも起こりうると認識する必要がある。先に起こったほうが後者も意味するかのように扱ってはならない。
 
-**A purpose-built escape hatch (`wake_up_pollfree()`) can be the right fix even when it isn't the "clean" one.** The commit message is explicit that tying `cgroup_file_release()` to `fput()` properly would be the more correct fix, but also the far larger one — using the existing pattern for "this waitqueue's lifetime isn't tied to the file's" was judged the safer, smaller change for something this reachable.
+**専用の脱出口（`wake_up_pollfree()`）は、「きれいな」修正でなくても正しい修正になりうる。** コミットメッセージは、`cgroup_file_release()` を `fput()` に正しく結び付けるほうがより正しい修正であるが、はるかに大きな修正でもあると明言している。これほど到達しやすい問題に対しては、「この待ちキューの寿命はファイルの寿命に結び付いていない」場合の既存パターンを使うほうが、より安全で小さな変更だと判断された。
 
-!!! warning "Pattern to watch for"
-    Whenever one kernel object (here, a cgroup-owned trigger) is referenced from a general-purpose notification mechanism (here, `epoll`) built around a *different* object's lifetime (a `struct file`), check what happens if the owning object is torn down first, out of band, while the notification mechanism still believes the reference is live.
+!!! warning "注意すべきパターン"
+    あるカーネルオブジェクト（ここではcgroupが所有するトリガー）が、*別の*オブジェクトの寿命（`struct file`）を前提に作られた汎用の通知機構（ここでは `epoll`）から参照されている場合は常に、通知機構がまだ参照は生きていると信じている間に、所有オブジェクトが帯域外で先に破棄されたら何が起こるかを確認すること。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Scheduler Overview](../README.md) — pressure-stall accounting and PSI
-- [cgroup v2](../../cgroups/cgroup-v2.md) — cgroup removal and file lifecycle
+- [スケジューラの概要](../README.md) — プレッシャーストールの計上とPSI
+- [cgroup v2](../../cgroups/cgroup-v2.md) — cgroupの削除とファイルのライフサイクル
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: c2dbe32d5db5](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c2dbe32d5db5c4ead121cf86dabd5ab691fb47fe) — "sched/psi: Fix use-after-free in ep_remove_wait_queue()," the mainline fix
-- [git.kernel.org: security/vulns — CVE-2023-52707](https://git.kernel.org/pub/scm/linux/security/vulns.git/plain/cve/published/2023/CVE-2023-52707.mbox) — the kernel CVE team's official announcement, including affected/fixed versions across stable branches
+- [git.kernel.org: c2dbe32d5db5](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c2dbe32d5db5c4ead121cf86dabd5ab691fb47fe) — "sched/psi: Fix use-after-free in ep_remove_wait_queue()"、メインラインの修正
+- [git.kernel.org: security/vulns — CVE-2023-52707](https://git.kernel.org/pub/scm/linux/security/vulns.git/plain/cve/published/2023/CVE-2023-52707.mbox) — カーネルCVEチームの公式アナウンス。各stableブランチにおける影響を受けるバージョンと修正済みバージョンを含む

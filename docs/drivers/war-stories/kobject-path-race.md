@@ -1,37 +1,37 @@
-# The kobject Path Race That Needed a Retry, Not a Lock {#the-kobject-path-race-that-needed-a-retry-not-a-lock}
+# ロックではなくリトライが必要だったkobjectパスの競合 {#the-kobject-path-race-that-needed-a-retry-not-a-lock}
 
-> CVE-2023-45863 — `kobject_get_path()` computed a sysfs path's length in one pass and filled the buffer in a second, unsynchronized pass, and a network-interface rename landing between the two passes could grow a name enough to overflow the undersized buffer straight into a heap slab
+> CVE-2023-45863 — `kobject_get_path()`はsysfsパスの長さを1回目のパスで計算し、同期のない2回目のパスでバッファを埋めていた。その2つのパスの間にネットワークインタフェースのリネームが割り込むと、名前が十分に長くなって小さすぎるバッファをあふれ、そのままヒープのslabに書き込むことがあった
 
-Disclosed
-:   October 14, 2023 (CVE-2023-45863 published on NVD; the bug was found, reported, and fixed months earlier, in December 2022–January 2023 — see below)
+公開
+:   2023年10月14日（NVDでCVE-2023-45863が公開。バグの発見・報告・修正はそれより数か月前の2022年12月〜2023年1月に行われた。後述）
 
-Reported by
-:   Wang Hai, Huawei (KASAN-based reproduction)
+報告者
+:   Wang Hai, Huawei（KASANによる再現）
 
 CVSS
-:   6.4 MEDIUM (CVSS 3.1, `AV:L/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H`)
+:   6.4 MEDIUM（CVSS 3.1、`AV:L/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H`）
 
-Bug present since
-:   at least Linux 2.6.12-rc2 (April 2005, the earliest point in the kernel's git-tracked history) — `kobject_get_path()`'s two-pass length/fill design already existed at the very start of git history
+バグの混入時期
+:   少なくともLinux 2.6.12-rc2（2005年4月。カーネルのgitで追跡されている履歴の最も古い時点）から。`kobject_get_path()`の長さ計算/埋め込みの2パス設計は、git履歴の最初の時点ですでに存在していた
 
-Fixed in
-:   commit `3bb2a01caa81`, merged January 11, 2023 — backported to stable as Linux 6.2.3 (March 10, 2023); first reached mainline in Linux 6.3 (April 23, 2023)
+修正バージョン
+:   コミット`3bb2a01caa81`、2023年1月11日にマージ。stableへはLinux 6.2.3（2023年3月10日）としてバックポートされた。メインラインに初めて入ったのはLinux 6.3（2023年4月23日）
 
-Exploit tool
-:   no public proof-of-concept found
+エクスプロイトツール
+:   公開された概念実証は見つかっていない
 
-Actively exploited
-:   no confirmed cases (not on CISA KEV)
+実際の悪用
+:   確認された事例なし（CISA KEVに未掲載）
 
-*Part of [War Stories: Device Drivers](../war-stories.md).*
+*[事件簿: デバイスドライバ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 発生前の状態 {#before-state}
 
-Every uevent the kernel sends to userspace — `add`, `remove`, `change`, `move` — carries a `DEVPATH` field: the device's location in the sysfs tree, such as `/devices/pci0000:00/.../net/eth0`. `udevd`/`systemd-udevd` uses that string, joined with `/sys`, to know exactly which sysfs node an event refers to, so it can read further attributes, apply naming and permission rules, and create the matching `/dev` node. `kobject_get_path()` builds that string by walking a kobject's `parent` chain up to the root, in two separate passes: `get_kobj_path_length()` walks the chain once, summing `strlen(kobject_name(parent)) + 1` for every ancestor to compute the exact buffer size needed; `kobject_get_path()` then allocates a buffer of exactly that size and calls `fill_kobj_path()`, which walks the *same* chain a second time, writing each ancestor's name into the buffer right-to-left. Nothing holds a lock across the two passes — the code trusts that the chain, and every name in it, is unchanged between them.
+カーネルがユーザー空間に送るすべてのuevent（`add`、`remove`、`change`、`move`）は`DEVPATH`フィールドを持つ。これはsysfsツリーにおけるデバイスの位置で、例えば`/devices/pci0000:00/.../net/eth0`のようなものである。`udevd`/`systemd-udevd`はこの文字列を`/sys`と連結して、イベントがどのsysfsノードを指しているかを正確に知り、さらに属性を読み、命名規則や権限規則を適用し、対応する`/dev`ノードを作成する。`kobject_get_path()`はこの文字列を、kobjectの`parent`チェーンをルートまでたどることで構築するが、それを2つの別々のパスで行う。`get_kobj_path_length()`はチェーンを1回たどり、すべての祖先について`strlen(kobject_name(parent)) + 1`を合計して、必要なバッファサイズを正確に計算する。続いて`kobject_get_path()`がちょうどそのサイズのバッファを割り当てて`fill_kobj_path()`を呼び出し、これが*同じ*チェーンをもう一度たどって、各祖先の名前を右から左へバッファに書き込む。2つのパスをまたいでロックを保持するものは何もない。コードは、チェーンとその中のすべての名前が2つのパスの間で変わらないことを信頼している。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-`ixgbe_probe()`, loading a network driver, registers a child kobject (the NIC's MII bus) via `device_add()`, which needs to build that child's sysfs path for its own `add` uevent. On CPU 0, `get_kobj_path_length()` walks up through the child's parent — the netdev's own kobject, e.g. named `eth0` — and computes a length based on that name. Concurrently, on CPU 1, `systemd-udevd` — reacting to the `add` uevent already sent moments earlier for the netdev itself — issues a rename, for instance applying a persistent-interface-naming rule that changes `eth0` to something longer like `enp3s0f0`. `kobject_rename()` swaps `kobj->name` to point at the new, longer string. Its own doc comment places the burden of synchronization entirely on the caller: "It is the responsibility of the caller to provide mutual exclusion between two different calls of `kobject_rename` on the same kobject." For a network interface, that mutual exclusion comes from the RTNL lock its caller (`dev_change_name()`) already holds — serializing renames against each other, but doing nothing to serialize a rename against an unrelated reader like `get_kobj_path_length()`/`fill_kobj_path()`, which never take RTNL or any other lock at all. If the rename lands between the two passes, `fill_kobj_path()`'s second walk sees the *new*, longer name for that ancestor while working with the length computed from the *old*, shorter one. The commit fixing this diagrams the interleaving directly:
+ネットワークドライバをロードしている`ixgbe_probe()`は、`device_add()`を介して子kobject（NICのMIIバス）を登録する。これは、その子自身の`add` ueventのためにsysfsパスを構築する必要がある。CPU 0では、`get_kobj_path_length()`が子の親（netdev自身のkobjectで、例えば`eth0`という名前）をたどり、その名前に基づいて長さを計算する。同時にCPU 1では、`systemd-udevd`が（少し前にnetdev自体について送られた`add` ueventに反応して）リネームを発行する。例えば、`eth0`を`enp3s0f0`のようなより長い名前に変える永続的なインタフェース命名規則を適用する場合である。`kobject_rename()`は`kobj->name`を新しい、より長い文字列を指すように差し替える。そのドキュメントコメントは、同期の責任を完全に呼び出し元に負わせている: "It is the responsibility of the caller to provide mutual exclusion between two different calls of `kobject_rename` on the same kobject."（訳: 同じkobjectに対する2つの異なる`kobject_rename`の呼び出しの間で相互排他を提供するのは、呼び出し元の責任である。）ネットワークインタフェースの場合、その相互排他は呼び出し元（`dev_change_name()`）がすでに保持しているRTNLロックによってもたらされる。これはリネーム同士を直列化するが、RTNLやその他のいかなるロックも一切取らない`get_kobj_path_length()`/`fill_kobj_path()`のような無関係な読み手とリネームとの直列化には何の役にも立たない。リネームが2つのパスの間に入ると、`fill_kobj_path()`の2回目のたどりはその祖先について*新しい*、より長い名前を見る一方で、*古い*、より短い名前から計算された長さを使って処理することになる。これを修正したコミットは、このインターリーブを直接図示している。
 
 ```
 cpu0                                         cpu1
@@ -64,11 +64,11 @@ ixgbe_probe
                         */
 ```
 
-`fill_kobj_path()` had no bound of its own — it trusted the `length` argument it was handed, and blindly subtracted `strlen()` of whatever name each ancestor's `kobject_name()` currently returned, walking off the front of the undersized buffer and `memcpy`-ing past its start.
+`fill_kobj_path()`は独自の境界を持っていなかった。渡された`length`引数を信頼し、各祖先の`kobject_name()`がその時点で返す名前の`strlen()`を盲目的に差し引いていき、小さすぎるバッファの先頭を越えて、その開始位置より前に`memcpy`していた。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-This is a heap buffer overflow with both the write offset and content driven by the renamed interface's new name — a write, not merely a read, past the front of a slab allocation. Wang Hai's KASAN report, from a stress-test loop of `rmmod ixgbe; sleep 0.5; modprobe ixgbe; sleep 0.5`, caught it directly:
+これは、書き込みオフセットと内容の両方がリネームされたインタフェースの新しい名前によって決まるヒープバッファオーバーフローである。単なる読み取りではなく、slab割り当ての先頭より前への書き込みである。`rmmod ixgbe; sleep 0.5; modprobe ixgbe; sleep 0.5`というストレステストのループから得られたWang HaiのKASANレポートは、これを直接捕捉した。
 
 ```
 BUG: KASAN: slab-out-of-bounds in fill_kobj_path+0x50/0xc0
@@ -97,13 +97,13 @@ Write of size 7 at addr ff1100090573d1fd by task kworker/28:1/673
  ret_from_fork+0x1f/0x30
 ```
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-`get_kobj_path_length()` and `fill_kobj_path()` were written under an implicit assumption: that a kobject's ancestor chain, and every ancestor's name, would hold still between a length computation and the fill that follows it. That assumption is reasonable for the common case — most kobjects aren't renamed — but nothing in the code enforced it, and a network interface rename triggered by udev's own reaction to the *first* uevent this same probe sequence sent is exactly the kind of concurrent event the two-pass design had no way to account for. The bug required both sides of the race to hold real, but not exotic, privilege: triggering the probe/reload path used in the reproducer needs `CAP_SYS_MODULE` (module load/unload), and issuing an interface rename via rtnetlink or the legacy `SIOCSIFNAME` ioctl needs `CAP_NET_ADMIN` — capabilities `systemd-udevd`, running as root, already holds as a matter of course. When Wang Hai pinged for a merge decision, Greg Kroah-Hartman's reply weighed exactly this: "It's in my 'to review' queue that I am working on. As this is not anything that a normal user can trigger, it's not that high of a priority, right?" — an explicit acknowledgment that the bug's root-only trigger surface shaped how urgently it was treated, not whether it was real.
+`get_kobj_path_length()`と`fill_kobj_path()`は、暗黙の前提の下で書かれていた。kobjectの祖先チェーンとすべての祖先の名前が、長さの計算とそれに続く埋め込みの間で変わらないという前提である。この前提は一般的なケースでは妥当である（ほとんどのkobjectはリネームされない）が、コード内でそれを強制するものは何もなかった。そして、この同じprobeシーケンスが送った*最初の*ueventに対するudev自身の反応として引き起こされるネットワークインタフェースのリネームは、まさに2パス設計では考慮しようのない種類の並行イベントだった。このバグは、競合の両側が現実的ではあるが特殊ではない特権を持つことを必要とした。再現手順で使われたprobe/リロードのパスを引き起こすには`CAP_SYS_MODULE`（モジュールのロード/アンロード）が必要で、rtnetlinkまたはレガシーな`SIOCSIFNAME` ioctlでインタフェースのリネームを発行するには`CAP_NET_ADMIN`が必要である。これらはrootとして動作する`systemd-udevd`が当然のこととしてすでに持っているケーパビリティである。Wang Haiがマージの判断を催促したとき、Greg Kroah-Hartmanの返信はまさにこの点を比較考量していた: "It's in my 'to review' queue that I am working on. As this is not anything that a normal user can trigger, it's not that high of a priority, right?"（訳: 今取り組んでいる「レビュー予定」キューに入っている。これは一般ユーザーが引き起こせるものではないから、それほど優先度は高くないよね？）これは、バグのトリガー面がrootに限られることが、バグが本物かどうかではなく、どれだけ急いで扱われるかを左右したことを明示的に認めたものである。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`3bb2a01caa81` ("kobject: Fix slab-out-of-bounds in fill_kobj_path()", Wang Hai) doesn't add a lock across the two passes — it makes `fill_kobj_path()` bounds-check itself and retry from scratch if the chain moved under it:
+`3bb2a01caa81`（"kobject: Fix slab-out-of-bounds in fill_kobj_path()"、Wang Hai）は、2つのパスをまたぐロックを追加しない。代わりに、`fill_kobj_path()`自身に境界チェックをさせ、チェーンが足元で変わった場合は最初からリトライさせる。
 
 ```diff
 -static void fill_kobj_path(const struct kobject *kobj, char *path, int length)
@@ -139,26 +139,26 @@ Write of size 7 at addr ff1100090573d1fd by task kworker/28:1/673
  }
 ```
 
-Every write in `fill_kobj_path()` is now preceded by a check that `length` hasn't gone non-positive; the moment it would, the function bails out with `-EINVAL` instead of writing out of bounds, and `kobject_get_path()` treats that as a signal that the buffer it allocated is stale, frees it, and restarts the whole length-then-fill computation from `retry:`. There is still no lock — a sufficiently persistent stream of renames could in principle retry repeatedly — and a reviewer, Michal Swiatkowski, asked exactly that: "I wonder if there is no case we end up with infinite loop (fill_kobj_path always returning error). Do You know?" Wang Hai's answer: "It should only be possible to have an infinite loop if name or parent keeps changing. The probability of this is extremely low. If necessary, change it to only retry 3 times?" The retry cap was never added to the merged fix — `kobject_get_path()` retries unconditionally on every detected mismatch.
+`fill_kobj_path()`のすべての書き込みの前に、`length`が0以下になっていないかのチェックが入るようになった。そうなりそうになった時点で、関数は範囲外に書き込む代わりに`-EINVAL`で抜け出し、`kobject_get_path()`はそれを割り当てたバッファが古くなったというシグナルとして扱い、バッファを解放して、長さの計算から埋め込みまでの全体を`retry:`からやり直す。依然としてロックはない。十分に執拗なリネームの連続があれば、原理的には何度もリトライし続ける可能性がある。レビュアーのMichal Swiatkowskiはまさにそれを尋ねた: "I wonder if there is no case we end up with infinite loop (fill_kobj_path always returning error). Do You know?"（訳: 無限ループ（fill_kobj_pathが常にエラーを返す）に陥るケースはないのだろうか。ご存じだろうか？）Wang Haiの回答: "It should only be possible to have an infinite loop if name or parent keeps changing. The probability of this is extremely low. If necessary, change it to only retry 3 times?"（訳: 無限ループになりうるのは、名前か親が変わり続ける場合だけのはずだ。その確率は極めて低い。必要なら、リトライを3回までに変更しようか？）リトライ回数の上限は、マージされた修正には結局追加されなかった。`kobject_get_path()`は不一致を検出するたびに無条件にリトライする。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A two-pass "measure, then fill" pattern needs either a lock across both passes or a way for the fill pass to detect that the measurement is stale — it cannot simply trust the measurement stayed valid.** Locking wasn't the fix chosen here; a self-checking fill pass that fails cleanly and lets the caller retry achieved the same safety without introducing a new lock into a function already reachable from many contexts.
+**「測ってから埋める」2パスのパターンには、両方のパスをまたぐロックか、埋め込みパスが測定値の古さを検出する手段のどちらかが必要である。測定値が有効なままであることを単純に信頼することはできない。** ここで選ばれた修正はロックではなかった。きれいに失敗して呼び出し元にリトライさせる自己チェック型の埋め込みパスによって、すでに多くのコンテキストから到達可能な関数に新しいロックを導入することなく、同等の安全性を実現した。
 
-**A bug's real-world urgency and its correctness are separate questions, and maintainers are explicit about weighing the first without denying the second.** Nothing about `dev->driver`-adjacent bugs being root-only made this one less of a genuine out-of-bounds heap write — it affected how quickly it got reviewed, not whether it needed fixing.
+**バグの現実的な緊急度とその正しさは別の問題であり、メンテナは後者を否定することなく前者を比較考量していることを明言している。** `dev->driver`に隣接するバグがrootでしか起こせないということは、このバグが本物のヒープ範囲外書き込みであることを何ら損なうものではなかった。それが影響したのはレビューされる速さであり、修正が必要かどうかではなかった。
 
-!!! warning "Pattern to watch for"
-    Any function that computes a buffer size in one pass and fills that buffer in a separate pass over the same mutable data is only as safe as the assumption that nothing changes in between. If the data can change concurrently and taking a lock across both passes isn't practical, the fill pass needs to detect a stale measurement and fail safely — not trust the number it was handed.
+!!! warning "注意すべきパターン"
+    同じ可変データに対して、1回目のパスでバッファサイズを計算し、別のパスでそのバッファを埋める関数は、その間に何も変わらないという前提と同程度にしか安全ではない。データが並行して変わりうるのに両方のパスをまたいでロックを取るのが現実的でないなら、埋め込みパスは古い測定値を検出して安全に失敗する必要がある。渡された数値を信頼してはならない。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Linux Device Model](../device-model.md) — `struct kobject`, sysfs, and the uevent mechanism this bug lives in
-- [The uevent_show() Fix That Deadlocked Driver Detach](uevent-show-deadlock.md) — a different driver-core race, in the same uevent-generation code path, whose deadlock traces back to a lock added to fix an earlier race and was ultimately resolved by removing that lock in favor of RCU
-- [Netfilter x_tables Heap Overflow](../../net/war-stories/netfilter-xtables.md) — a comparable heap-overflow-via-unchecked-length bug in a different subsystem
+- [Linuxデバイスモデル](../device-model.md) — `struct kobject`、sysfs、およびこのバグが存在するueventの仕組み
+- [The uevent_show() Fix That Deadlocked Driver Detach](uevent-show-deadlock.md) — 同じuevent生成のコードパスにある別のドライバコアの競合。そのデッドロックは以前の競合を修正するために追加されたロックに起因し、最終的にはそのロックを取り除いてRCUに置き換えることで解決された
+- [Netfilter x_tablesのヒープオーバーフロー](../../net/war-stories/netfilter-xtables.md) — 別のサブシステムにおける、未チェックの長さを介したヒープオーバーフローという比較可能なバグ
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: 3bb2a01caa81](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3bb2a01caa813d3a1845d378bbe4169ef280d394) — "kobject: Fix slab-out-of-bounds in fill_kobj_path()," the fix, with the full race diagram and KASAN report in its commit message
-- [lore.kernel.org: v2 patch thread](https://lore.kernel.org/r/20221220012143.52141-1-wanghai38@huawei.com/) — Wang Hai's submission and the Michal Swiatkowski / Greg Kroah-Hartman discussion
-- [NVD: CVE-2023-45863](https://nvd.nist.gov/vuln/detail/CVE-2023-45863) — CVE record, CVSS 3.1 6.4 MEDIUM, published October 14, 2023
-- [Debian LTS advisory DLA-3710-1](https://lists.debian.org/debian-lts-announce/2024/01/msg00004.html) — independent description of the flaw
+- [git.kernel.org: 3bb2a01caa81](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3bb2a01caa813d3a1845d378bbe4169ef280d394) — "kobject: Fix slab-out-of-bounds in fill_kobj_path()"。修正コミットで、コミットメッセージに競合の全体図とKASANレポートを含む
+- [lore.kernel.org: v2パッチスレッド](https://lore.kernel.org/r/20221220012143.52141-1-wanghai38@huawei.com/) — Wang Haiの投稿と、Michal Swiatkowski / Greg Kroah-Hartmanとの議論
+- [NVD: CVE-2023-45863](https://nvd.nist.gov/vuln/detail/CVE-2023-45863) — CVEレコード。CVSS 3.1 6.4 MEDIUM、2023年10月14日公開
+- [Debian LTSアドバイザリ DLA-3710-1](https://lists.debian.org/debian-lts-announce/2024/01/msg00004.html) — この欠陥についての独立した説明

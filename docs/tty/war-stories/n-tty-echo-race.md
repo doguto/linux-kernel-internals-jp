@@ -1,58 +1,58 @@
-# The n_tty Echo Race: Nine Years From Fix to CISA's Exploited-in-the-Wild List {#the-n_tty-echo-race-nine-years-from-fix-to-cisas-exploited-in-the-wild-list}
+# n_ttyエコー競合: 修正からCISAの悪用確認リスト入りまで9年 {#the-n_tty-echo-race-nine-years-from-fix-to-cisas-exploited-in-the-wild-list}
 
-> Writing to a pty while the line discipline echoed input back out let two writers corrupt the same tty buffer with no lock between them — fixed in 2014, and still showing up as a live Android root exploit technique nine years later.
+> ラインディシプリンが入力をエコーし返している間にptyへ書き込むと、2つの書き込み側が間にロックのないまま同じttyバッファを破壊できた。2014年に修正されたが、9年後になってもAndroidのroot化エクスプロイト手法として現役で使われていた。
 
-Landed
-:   Linux 3.15, May 2014 (CVE-2014-0196)
+収録
+:   Linux 3.15、2014年5月（CVE-2014-0196）
 
-Driver
-:   N_TTY line discipline (`drivers/tty/n_tty.c`)
+ドライバ
+:   N_TTYラインディシプリン（`drivers/tty/n_tty.c`）
 
-Fix author
+修正の作者
 :   Peter Hurley
 
-Mechanism
-:   Missing lock between concurrent writer and echo paths into the tty flip buffer
+メカニズム
+:   ttyフリップバッファへの書き込みパスとエコーパスが並行に走る際、その間にロックがなかった
 
-CVE-2014-0196 — CISA Known Exploited Vulnerabilities catalog (added 2023-05-12, nine years after the fix)
+CVE-2014-0196 — CISA Known Exploited Vulnerabilitiesカタログ（2023-05-12に追加、修正から9年後）
 
-*Part of [War Stories: TTY/Serial Bugs and Regressions](../war-stories.md).*
+*[事件簿: TTY/シリアルのバグとリグレッション](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-When a pty is in raw (non-canonical) mode with echo enabled and output post-processing disabled (`LECHO` set, `OPOST` clear — a mode real terminal programs put ptys into), every character a process writes to the pty gets echoed straight back through the line discipline to whatever's reading the other end. That echo path and an ordinary `write()` to the same pty both ultimately call into the same tty-buffer insertion machinery (`tty_insert_flip_string()` and friends) to append bytes to the tty's flip buffer.
+ptyがraw（非カノニカル）モードで、エコーが有効かつ出力後処理が無効（`LECHO` がセット、`OPOST` がクリア。実際の端末プログラムがptyをこのモードにする）のとき、プロセスがptyに書き込んだすべての文字は、ラインディシプリンを通って反対側で読んでいる者へそのままエコーされる。このエコーパスと、同じptyへの通常の `write()` は、どちらも最終的に同じttyバッファ挿入機構（`tty_insert_flip_string()` とその仲間）を呼び出して、ttyのフリップバッファにバイトを追加する。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-`n_tty_write()` (`drivers/tty/n_tty.c`) serialized *writers* against each other using the tty's `atomic_write_lock`. That lock does nothing to serialize a writer against the echo path — the echo path reaches the same buffer-insertion code through a completely different call chain, triggered by input arriving rather than by a `write()` call, and holds no lock in common with `atomic_write_lock`. A process that writes a long string to a pty while another process (or the kernel itself, echoing input from the other side) triggers echo output at the same time can have both paths racing on the same tty buffer's tail pointer and backing memory.
+`n_tty_write()`（`drivers/tty/n_tty.c`）は、ttyの `atomic_write_lock` を使って*書き込み側*同士を直列化していた。しかしこのロックは、書き込み側とエコーパスを直列化することには何の役にも立たない。エコーパスは、`write()` 呼び出しではなく入力の到着をきっかけとして、まったく異なる呼び出しチェーンを通って同じバッファ挿入コードに到達し、`atomic_write_lock` と共通するロックを何も保持しない。あるプロセスが長い文字列をptyに書き込んでいる最中に、別のプロセス（あるいは反対側からの入力をエコーするカーネル自身）が同時にエコー出力を引き起こすと、両方のパスが同じttyバッファの末尾ポインタとその背後のメモリに対して競合しうる。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-Two concurrent, unsynchronized appends to the same flip buffer corrupt the buffer's internal bookkeeping — advancing the same tail position twice, writing past where the other writer expected free space to be. Depending on timing and buffer state, this ranges from a kernel crash (denial of service) to a memory-corruption primitive that security researchers turned into a working local privilege-escalation exploit, since a pty is reachable by any unprivileged local user or process. That reachability — no special hardware, no unusual configuration, just a pty in a common echo mode — is why this bug proved so durable: it kept getting rediscovered as a rooting technique for Android devices running kernels that predated the fix, years after upstream had already resolved it. CISA added it to the Known Exploited Vulnerabilities catalog in May 2023, nine years after the patch landed, because it was still being actively exploited in the wild on unpatched/outdated kernels.
+同じフリップバッファへの、同期されていない2つの並行な追加は、バッファの内部管理情報を破壊する。同じ末尾位置を二重に進めたり、もう一方の書き込み側が空き領域だと思っていた場所を越えて書き込んだりする。タイミングとバッファの状態によって、結果はカーネルクラッシュ（サービス拒否）から、セキュリティ研究者が実際に動作するローカル権限昇格エクスプロイトに仕立てたメモリ破壊プリミティブにまで及ぶ。ptyは非特権のローカルユーザーやプロセスなら誰でも到達できるからである。この到達しやすさ（特別なハードウェアも珍しい設定も不要で、よくあるエコーモードのptyさえあればよい）こそが、このバグがこれほど長く生き残った理由である。アップストリームがとうに解決した何年も後になっても、修正以前のカーネルを搭載したAndroidデバイスのroot化手法として何度も再発見され続けた。CISAは2023年5月、パッチがマージされてから9年後に、これをKnown Exploited Vulnerabilitiesカタログに追加した。未パッチ／古いカーネル上で依然として実際に悪用されていたからである。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The bug is a classic instance of a lock that covers *one* known caller of a shared resource but not *all* callers. `atomic_write_lock` was designed to keep concurrent `write()` calls from interleaving with each other — a reasonable, narrower goal than "protect the tty buffer from every possible writer." The echo path wasn't a `write()` call at all; it was triggered from the input side, reusing the same underlying buffer-insertion primitives without going through the write serialization that was supposed to guard them. The bug is invisible from reading `n_tty_write()` in isolation — the function's own locking looks complete for what it directly does. It only becomes visible once you trace every other call site that reaches the same buffer-insertion functions and ask whether they share a lock with this one.
+このバグは、共有リソースの既知の呼び出し元*1つ*はカバーしているが*すべて*はカバーしていないロック、という典型例である。`atomic_write_lock` は、並行する `write()` 呼び出し同士が交錯しないように設計されていた。これは「あらゆる書き込み側からttyバッファを守る」よりも狭い、妥当な目標である。エコーパスはそもそも `write()` 呼び出しではなかった。入力側から引き起こされ、同じ下位のバッファ挿入プリミティブを再利用しながら、それらを守るはずだった書き込みの直列化を経由しなかった。このバグは `n_tty_write()` を単独で読んでも見えない。その関数が直接行うことに関しては、関数自身のロックは完全に見える。同じバッファ挿入関数に到達する他のすべての呼び出し箇所を追跡し、それらがこのロックを共有しているかを問うて初めて見えてくる。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-Commit `4291086b1f081b869c6d79e5b7441633dc3ace00` takes the N_TTY line discipline's own `output_lock` mutex around the `tty->ops->write()` call inside `n_tty_write()`, serializing the writer path against the echo path's use of the same lock — closing the gap `atomic_write_lock` never covered.
+コミット `4291086b1f081b869c6d79e5b7441633dc3ace00` は、`n_tty_write()` 内の `tty->ops->write()` 呼び出しの周りで、N_TTYラインディシプリン自身の `output_lock` mutexを取得する。これにより、書き込み側パスが、同じロックを使うエコーパスと直列化され、`atomic_write_lock` が一度もカバーしていなかった隙間が塞がれた。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A lock's name and its actual coverage can drift apart.** `atomic_write_lock` sounds like it should mean "no concurrent access to the write path," but its real scope was narrower — concurrent `write()` calls only — and a second, structurally different path into the same shared state (the echo path) existed outside that name's implied guarantee.
+**ロックの名前と実際のカバー範囲はずれうる。** `atomic_write_lock` は「書き込みパスへの並行アクセスはない」という意味のように聞こえるが、実際のスコープはもっと狭く、並行する `write()` 呼び出しだけだった。そして同じ共有状態への、構造的に異なる2つ目のパス（エコーパス）が、その名前が暗示する保証の外側に存在していた。
 
-**Fixing a bug doesn't retire it from an attacker's toolkit if the fix only ships to actively-updated kernels.** The 2014 fix was correct and complete for the code it touched. The bug's second life as a 2020s Android exploitation technique is a story about patch propagation and device lifecycle, not about the fix being wrong — a reminder that "fixed upstream" and "no longer exploitable in the field" are different claims with a potentially decade-long gap between them.
+**修正が積極的に更新されているカーネルにしか届かないなら、バグを修正してもそれが攻撃者の道具箱から消えるわけではない。** 2014年の修正は、触れたコードに関しては正しく完全だった。このバグが2020年代のAndroidエクスプロイト手法として第二の人生を送ったのは、パッチの伝播とデバイスのライフサイクルの話であり、修正が間違っていたという話ではない。「アップストリームで修正済み」と「現場でもはや悪用できない」は異なる主張であり、両者の間には10年近い隔たりがありうることを思い起こさせる。
 
-!!! warning "Pattern to watch for"
-    A lock named after one specific caller or call path (`atomic_write_lock` implying "the write path") guarding a resource that a *second*, differently-triggered code path (here, echo — triggered by input, not by a write syscall) also mutates without acquiring the same lock. Audit every caller of the shared buffer/state, not just the one the lock's name suggests.
+!!! warning "注意すべきパターン"
+    特定の1つの呼び出し元や呼び出しパスにちなんで名付けられたロック（「書き込みパス」を暗示する `atomic_write_lock`）が、あるリソースを守っているが、*別の*、異なる契機で動くコードパス（ここではエコー。書き込みシステムコールではなく入力によって起動される）も同じロックを取得せずにそれを変更している。ロックの名前が示唆するものだけでなく、共有バッファ／状態のすべての呼び出し元を監査すること。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Line Disciplines, termios, and Pseudo-Terminals](../line-disciplines.md) — N_TTY, canonical mode, and echo as covered today
-- [The pty_write() Lock That Was Fixed, Un-Fixed, and Fixed Again](pty-write-lock-saga.md) — a different tty-buffer locking bug, in the pty layer rather than N_TTY, that took three commits across four years to fully resolve
+- [ラインディシプリン、termios、疑似端末](../line-disciplines.md) — 現在のN_TTY、カノニカルモード、エコーの解説
+- [修正され、戻され、再び修正されたpty_write()のロック](pty-write-lock-saga.md) — N_TTYではなくptyレイヤーにおける別のttyバッファのロックのバグで、完全な解決までに4年にわたる3つのコミットを要した
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [NVD: CVE-2014-0196](https://nvd.nist.gov/vuln/detail/CVE-2014-0196) — CISA Known Exploited Vulnerabilities catalog, added 2023-05-12
-- [git.kernel.org: 4291086b1f08](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4291086b1f081b869c6d79e5b7441633dc3ace00) — the fix: take `output_lock` around the writer path's buffer insertion
+- [NVD: CVE-2014-0196](https://nvd.nist.gov/vuln/detail/CVE-2014-0196) — CISA Known Exploited Vulnerabilitiesカタログ、2023-05-12に追加
+- [git.kernel.org: 4291086b1f08](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4291086b1f081b869c6d79e5b7441633dc3ace00) — 修正: 書き込み側パスのバッファ挿入の周りで `output_lock` を取得する

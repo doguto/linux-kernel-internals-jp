@@ -1,32 +1,32 @@
-# AF_PACKET TPACKET_V3 Privilege Escalation {#afpacket-tpacketv3-privilege-escalation}
+# AF_PACKET TPACKET_V3 の権限昇格 {#afpacket-tpacketv3-privilege-escalation}
 
-> CVE-2017-7308 — a single `(int)` cast around an unsigned subtraction defeated a ring-buffer bounds check, found by syzkaller and turned into local root by Project Zero
+> CVE-2017-7308 — 符号なしの減算を囲むたった1つの `(int)` キャストが、リングバッファの境界チェックを無力化した。syzkaller によって発見され、Project Zero によってローカル root に仕立てられた
 
-Disclosed
-:   March 29, 2017
+公開日
+:   2017年3月29日
 
-Reported by
-:   Andrey Konovalov, Google Project Zero (via syzkaller + KASAN)
+報告者
+:   Andrey Konovalov、Google Project Zero（syzkaller + KASAN による）
 
 CVSS
 :   7.8 HIGH
 
-Fixed in
-:   mainline March 2017, backported to 4.10.x and earlier stable branches
+修正
+:   2017年3月にメインラインで修正、4.10.x およびそれ以前の stable ブランチにバックポート
 
-Exploit tool
-:   yes (2 Exploit-DB entries, incl. a [Metasploit module](https://www.exploit-db.com/exploits/44654))
+エクスプロイトツール
+:   あり（Exploit-DB に2件、[Metasploit モジュール](https://www.exploit-db.com/exploits/44654)を含む）
 
-Actively exploited
-:   no confirmed cases (not on CISA KEV)
+実際の悪用
+:   確認された事例はない（CISA KEV には掲載されていない）
 
-*Part of [War Stories: Network Stack Bugs and CVEs](../war-stories.md).*
+*[事件簿：ネットワークスタックのバグと CVE](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-`AF_PACKET` sockets (used by `tcpdump`, Wireshark, and any raw-capture tool) can be configured with a memory-mapped ring buffer via `PACKET_RX_RING`/`PACKET_TX_RING`, avoiding a copy per captured packet. `packet_set_ring()` in `net/packet/af_packet.c` validates the requested ring geometry — block size, number of blocks, frame size — before allocating and mapping the ring. For the `TPACKET_V3` ring format, each block reserves space for a small private header (`tp_sizeof_priv`) in addition to packet frames, computed via the `BLK_PLUS_PRIV()` macro.
+`AF_PACKET` ソケット（`tcpdump`、Wireshark、その他あらゆる生パケットキャプチャツールが使う）は、`PACKET_RX_RING`/`PACKET_TX_RING` によってメモリマップされたリングバッファを使うよう設定でき、キャプチャしたパケットごとのコピーを避けられる。`net/packet/af_packet.c` の `packet_set_ring()` は、リングを割り当ててマップする前に、要求されたリングのジオメトリ — ブロックサイズ、ブロック数、フレームサイズ — を検証する。`TPACKET_V3` のリング形式では、各ブロックはパケットフレームに加えて小さなプライベートヘッダ（`tp_sizeof_priv`）用の領域を予約し、これは `BLK_PLUS_PRIV()` マクロで計算される。
 
-The sanity check guarding this computation looked like:
+この計算を守る妥当性チェックは、次のようになっていた。
 
 ```c
 if (po->tp_version >= TPACKET_V3 &&
@@ -34,27 +34,27 @@ if (po->tp_version >= TPACKET_V3 &&
         goto out;
 ```
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Both `tp_block_size` and the result of `BLK_PLUS_PRIV()` are unsigned. Casting their subtraction to `(int)` before comparing to zero is unsafe: [Project Zero's Andrey Konovalov](https://projectzero.google/2017/05/exploiting-linux-kernel-via-packet.html), using syzkaller (a coverage-guided syscall fuzzer) together with KASAN, found that by supplying a `tp_sizeof_priv` value with its high bit set, the unsigned subtraction wraps to a large value that, when reinterpreted as a signed `int`, appears positive — silently passing a check that was supposed to reject an oversized private-header request.
+`tp_block_size` も `BLK_PLUS_PRIV()` の結果も符号なしである。両者の差をゼロと比較する前に `(int)` にキャストするのは安全ではない。[Project Zero の Andrey Konovalov](https://projectzero.google/2017/05/exploiting-linux-kernel-via-packet.html) は、syzkaller（カバレッジガイド型の syscall ファザー）と KASAN を組み合わせて、最上位ビットを立てた `tp_sizeof_priv` の値を与えると、符号なしの減算がラップアラウンドして大きな値になり、それを符号付き `int` として再解釈すると正の値に見えることを発見した — 大きすぎるプライベートヘッダの要求を拒否するはずだったチェックを、黙って通過してしまうのである。
 
-This let `blk_sizeof_priv` end up set to an attacker-chosen value, corrupting the block layout computed in `init_prb_bdqc()` and `prb_open_block()` and, downstream of that, the `max_frame_len` calculation used in `__packet_lookup_frame_in_block()` — leaving the kernel's view of the ring's frame layout disagreeing with the actual size of the mapped blocks.
+これにより `blk_sizeof_priv` が攻撃者の選んだ値に設定されることになり、`init_prb_bdqc()` と `prb_open_block()` で計算されるブロックレイアウトが破壊され、さらにその下流で `__packet_lookup_frame_in_block()` が使う `max_frame_len` の計算も破壊された — カーネルが認識しているリングのフレームレイアウトと、マップされたブロックの実際のサイズとが食い違う状態が生まれた。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The mismatch between the computed frame layout and the real block boundaries let a caller drive a **heap out-of-bounds write** when the kernel populated ring-buffer frames — a local integer-signedness bug that Project Zero's [writeup](https://projectzero.google/2017/05/exploiting-linux-kernel-via-packet.html), "Exploiting the Linux kernel via packet sockets," turned into a working local root exploit.
+計算されたフレームレイアウトと実際のブロック境界との不一致により、呼び出し側は、カーネルがリングバッファのフレームを埋める際に**ヒープの範囲外書き込み**を引き起こせた — このローカルな整数の符号のバグを、Project Zero の[解説記事](https://projectzero.google/2017/05/exploiting-linux-kernel-via-packet.html)「Exploiting the Linux kernel via packet sockets」は、動作するローカル root エクスプロイトに仕立てた。
 
-Creating an `AF_PACKET` socket at all requires `CAP_NET_RAW` — ordinarily a meaningful barrier, but, as the writeup notes, "if a kernel has unprivileged user namespaces enabled, then an unprivileged user is able to create packet sockets," and Ubuntu shipped with `CONFIG_USER_NS=y` and no restrictions on its use, a common default at the time (the writeup explicitly notes Android disallows untrusted code from creating `AF_PACKET` sockets at all).
+`AF_PACKET` ソケットを作成するにはそもそも `CAP_NET_RAW` が必要である — 通常なら意味のある障壁だが、解説記事が指摘するように、"if a kernel has unprivileged user namespaces enabled, then an unprivileged user is able to create packet sockets"（訳: カーネルで非特権ユーザー namespace が有効になっていれば、非特権ユーザーがパケットソケットを作成できる）。そして Ubuntu は `CONFIG_USER_NS=y` かつその使用に何の制限もない状態で出荷されており、これは当時一般的なデフォルトだった（解説記事は、Android が信頼されないコードによる `AF_PACKET` ソケットの作成を一切許可していないことを明記している）。
 
-Konovalov published his own working exploit alongside the writeup ([Exploit-DB 41994](https://www.exploit-db.com/exploits/41994), May 2017), and a year later Brendan Coles ported it into a [Metasploit module](https://www.exploit-db.com/exploits/44654) (`exploit/linux/local/af_packet_packet_set_ring_priv_esc`), turning a research bug into a one-command local-root tool available to anyone running the framework. There's no public evidence of it being caught in active exploitation against real targets (it isn't on CISA's KEV catalog), but "no confirmed attack" and "no practical way to attack" are different claims — this one had the latter closed within months of disclosure.
+Konovalov は解説記事とともに自身の動作するエクスプロイトを公開し（[Exploit-DB 41994](https://www.exploit-db.com/exploits/41994)、2017年5月）、1年後には Brendan Coles がそれを [Metasploit モジュール](https://www.exploit-db.com/exploits/44654)（`exploit/linux/local/af_packet_packet_set_ring_priv_esc`）に移植し、研究上のバグを、フレームワークを動かす誰もが使えるワンコマンドのローカル root ツールに変えた。実際の標的に対する悪用で捕捉されたという公開の証拠はない（CISA の KEV カタログには掲載されていない）が、「確認された攻撃はない」と「攻撃する現実的な方法がない」は異なる主張である — このバグについては、後者が開示から数か月以内に閉じられた。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-A single unsigned-to-signed cast, applied to a subtraction of two attacker-influenced unsigned values, was enough to defeat a bounds check. The check's author reasoned about the comparison as if it were happening in a signed domain where "negative or zero" cleanly meant "too small," without accounting for how a large unsigned wraparound would be reinterpreted once cast to `int`.
+攻撃者が影響を与えられる2つの符号なしの値の減算に対して適用された、たった1つの符号なしから符号付きへのキャストが、境界チェックを無力化するのに十分だった。チェックの作者は、「負またはゼロ」がそのまま「小さすぎる」を意味する符号付きの領域で比較が行われているかのように推論しており、符号なしの大きなラップアラウンドが `int` にキャストされたときにどう再解釈されるかを考慮していなかった。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-[`2b6867c2ce76`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2b6867c2ce76c596676bec7d2d525af525fdc6e2) ("net/packet: fix overflow in check for priv area size"), authored by Andrey Konovalov, drops the signed cast and instead casts `tp_sizeof_priv` to `u64` before the comparison — comparing both sides in a wide-enough, correctly-signed domain that wraparound can no longer occur:
+Andrey Konovalov が作成した [`2b6867c2ce76`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2b6867c2ce76c596676bec7d2d525af525fdc6e2)（"net/packet: fix overflow in check for priv area size"）は、符号付きのキャストを取り除き、代わりに比較の前に `tp_sizeof_priv` を `u64` にキャストする — 両辺を、ラップアラウンドがもはや起こりえない、十分に幅が広く符号の扱いが正しい領域で比較するのである。
 
 ```c
 if (po->tp_version >= TPACKET_V3 &&
@@ -63,33 +63,33 @@ if (po->tp_version >= TPACKET_V3 &&
         goto out;
 ```
 
-The fix landed in mainline in March 2017 and was backported to stable kernels; distributions shipped it in their 4.10.x and earlier stable branches shortly after.
+修正は2017年3月にメインラインに入り、stable カーネルにバックポートされた。ディストリビューションはその後まもなく、4.10.x およびそれ以前の stable ブランチでこれを出荷した。
 
-Konovalov [originally posted this fix](https://lore.kernel.org/netdev/cover.1490709552.git.andreyknvl@google.com/) as part of a five-patch series addressing multiple overflow and signedness issues across the AF_PACKET ring-buffer code. Willem de Bruijn, reviewing on netdev, pushed back on the scope: "These are a lot of changes to backport to stable kernels. Can we separate the minimal patch set needed to address known overflow to send to net... and follow up with the larger cleanup to net-next." Konovalov agreed and dropped two of the five patches — the `tp_frame_size` checks and a reordering cleanup — from the series ("remove cleanup patches, will send in a separate patchset"), [reposting the trimmed three-patch v2](https://lore.kernel.org/netdev/cover.1490796500.git.andreyknvl@google.com/) the next day as the minimal `net` submission that actually needed to reach stable. David Miller applied that the day after.
+Konovalov は[当初この修正を](https://lore.kernel.org/netdev/cover.1490709552.git.andreyknvl@google.com/)、AF_PACKET のリングバッファのコード全体にわたる複数のオーバーフローと符号の問題に対処する5パッチのシリーズの一部として投稿した。netdev でレビューした Willem de Bruijn は、その範囲に異議を唱えた。"These are a lot of changes to backport to stable kernels. Can we separate the minimal patch set needed to address known overflow to send to net... and follow up with the larger cleanup to net-next."（訳: stable カーネルにバックポートするには変更が多すぎる。既知のオーバーフローに対処するのに必要な最小限のパッチセットを分けて net に送り……より大きなクリーンアップは後から net-next に送れないか）。Konovalov は同意し、5つのパッチのうち2つ — `tp_frame_size` のチェックと並べ替えのクリーンアップ — をシリーズから外し（"remove cleanup patches, will send in a separate patchset"）、翌日、実際に stable に届く必要のある最小限の `net` 向け投稿として、[3パッチに絞った v2 を再投稿した](https://lore.kernel.org/netdev/cover.1490796500.git.andreyknvl@google.com/)。David Miller はその翌日にそれを適用した。
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**Signed/unsigned casts around a subtraction are a recurring bug class.** "Cast the difference of two unsigned values to `int` and check the sign" is a pattern that looks correct and reads naturally, but only actually works if the difference can never wrap — a property that has to be proven, not assumed, whenever either operand is attacker-influenced.
+**減算を囲む符号付き/符号なしのキャストは、繰り返し現れるバグクラスである。** 「2つの符号なしの値の差を `int` にキャストして符号をチェックする」というのは、正しく見え自然に読めるパターンだが、実際に機能するのは差が決してラップアラウンドしない場合だけである — そしてその性質は、どちらかのオペランドが攻撃者の影響を受ける場合には常に、仮定するのではなく証明しなければならない。
 
-**A capability check is only as strong as its reachability.** `CAP_NET_RAW` was a real, meaningful gate in a world without unprivileged user namespaces; once unprivileged namespace creation became common, the same capability check stopped meaning "trusted caller."
+**ケーパビリティチェックの強さは、その到達可能性の強さで決まる。** `CAP_NET_RAW` は、非特権ユーザー namespace のない世界では、実在する意味のある関門だった。非特権での namespace 作成が一般的になると、同じケーパビリティチェックは「信頼された呼び出し側」を意味しなくなった。
 
-**Ring-buffer geometry bugs are size-mismatch bugs by nature.** Any code that separately validates a size and later relies on that size to compute offsets is vulnerable to exactly this class of bug if the validation and the later use don't agree bit-for-bit on the arithmetic domain (signed vs. unsigned, width).
+**リングバッファのジオメトリのバグは、本質的にサイズ不一致のバグである。** サイズを別途検証し、後でそのサイズに依存してオフセットを計算するコードはどれも、検証と後の使用とが演算の領域（符号付きか符号なしか、ビット幅）についてビット単位で一致していなければ、まさにこのクラスのバグに対して脆弱である。
 
-!!! warning "Pattern to watch for"
-    Grep for `(int)` casts wrapping subtraction of two `unsigned`/`size_t`/`u32`/`u64` values anywhere a bounds check follows — this exact shape (`(int)(a - b) <= 0`) is what caused CVE-2017-7308 and recurs across the kernel. Also worth checking: `sysctl kernel.unprivileged_userns_clone` (or your distro's equivalent) — if unprivileged namespace creation is enabled, treat every `CAP_NET_RAW`/`CAP_NET_ADMIN`-gated local bug as remotely reachable from container workloads.
+!!! warning "注意すべきパターン"
+    境界チェックが後に続く場所で、2つの `unsigned`/`size_t`/`u32`/`u64` の値の減算を囲む `(int)` キャストを grep すること — まさにこの形（`(int)(a - b) <= 0`）が CVE-2017-7308 を引き起こしたものであり、カーネル全体で繰り返し現れる。あわせて確認する価値があるのは `sysctl kernel.unprivileged_userns_clone`（またはディストリビューションでの同等の設定）である — 非特権での namespace 作成が有効なら、`CAP_NET_RAW`/`CAP_NET_ADMIN` で守られたすべてのローカルバグを、コンテナのワークロードからリモートに到達可能なものとして扱うこと。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [AF_PACKET Raw Sockets](../packet-socket.md) — the ring-buffer mechanics behind this bug
-- [Network Namespaces](../net-namespaces.md) — how unprivileged user+network namespaces expose `CAP_NET_RAW`-gated code paths
-- [Netfilter x_tables Heap Overflow](netfilter-xtables.md) — another capability-gated local bug turned container-escape primitive
-- [UDP UFO Path-Switch Corruption](udp-ufo.md) — another syzkaller-found bug in the same era
+- [AF_PACKET 生ソケット](../packet-socket.md) — このバグの背後にあるリングバッファの仕組み
+- [ネットワーク namespace](../net-namespaces.md) — 非特権のユーザー+ネットワーク namespace が、`CAP_NET_RAW` で守られたコードパスをどのように露出させるか
+- [Netfilter x_tables のヒープオーバーフロー](netfilter-xtables.md) — コンテナエスケープのプリミティブになった、ケーパビリティで守られたもう1つのローカルバグ
+- [UDP UFO のパス切り替えによる破損](udp-ufo.md) — 同時期に syzkaller で発見されたもう1つのバグ
 
-## External references {#external-references}
+## 外部参考文献 {#external-references}
 
-- [NVD: CVE-2017-7308](https://nvd.nist.gov/vuln/detail/CVE-2017-7308) — AF_PACKET TPACKET_V3 CVE record
+- [NVD: CVE-2017-7308](https://nvd.nist.gov/vuln/detail/CVE-2017-7308) — AF_PACKET TPACKET_V3 の CVE レコード
 - [git.kernel.org: 2b6867c2ce76](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2b6867c2ce76c596676bec7d2d525af525fdc6e2) — "net/packet: fix overflow in check for priv area size"
-- [lore.kernel.org: net/packet: fix multiple overflow issues in ring buffers (v1)](https://lore.kernel.org/netdev/cover.1490709552.git.andreyknvl@google.com/) — the cover-letter thread showing Willem de Bruijn's request to split the minimal overflow fix from the broader ring-buffer cleanup
-- [lore.kernel.org: v2, the trimmed three-patch series](https://lore.kernel.org/netdev/cover.1490796500.git.andreyknvl@google.com/) — the resubmission David Miller actually merged
-- [Project Zero: Exploiting the Linux kernel via packet sockets](https://projectzero.google/2017/05/exploiting-linux-kernel-via-packet.html) — Andrey Konovalov's writeup of CVE-2017-7308
-- [Exploit-DB 41994](https://www.exploit-db.com/exploits/41994) and [44654](https://www.exploit-db.com/exploits/44654) — Konovalov's own C exploit, published with the Project Zero writeup, and Brendan Coles's Metasploit port of it
+- [lore.kernel.org: net/packet: fix multiple overflow issues in ring buffers (v1)](https://lore.kernel.org/netdev/cover.1490709552.git.andreyknvl@google.com/) — 最小限のオーバーフロー修正を、より広範なリングバッファのクリーンアップから分離するよう Willem de Bruijn が求めたことを示すカバーレターのスレッド
+- [lore.kernel.org: v2、3パッチに絞ったシリーズ](https://lore.kernel.org/netdev/cover.1490796500.git.andreyknvl@google.com/) — David Miller が実際にマージした再投稿
+- [Project Zero: Exploiting the Linux kernel via packet sockets](https://projectzero.google/2017/05/exploiting-linux-kernel-via-packet.html) — Andrey Konovalov による CVE-2017-7308 の解説記事
+- [Exploit-DB 41994](https://www.exploit-db.com/exploits/41994) と [44654](https://www.exploit-db.com/exploits/44654) — Project Zero の解説記事とともに公開された Konovalov 自身の C エクスプロイトと、Brendan Coles によるその Metasploit への移植

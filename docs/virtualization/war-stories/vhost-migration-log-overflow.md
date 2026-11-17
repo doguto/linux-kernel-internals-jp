@@ -1,70 +1,70 @@
-# vhost: The Dirty-Log Counter That Forgot Zero-Length Descriptors {#vhost-the-dirty-log-counter-that-forgot-zero-length-descriptors}
+# vhost：長さゼロのディスクリプタを忘れていたダーティログカウンタ {#vhost-the-dirty-log-counter-that-forgot-zero-length-descriptors}
 
-> CVE-2019-14835 — vhost's live-migration dirty-page logging assumed one log entry per descriptor could never outrun the descriptor count itself, an invariant a single guest-supplied zero-length descriptor could break, turning a routine migration into a guest-controlled kernel heap overflow
+> CVE-2019-14835 — vhost のライブマイグレーション用ダーティページロギングは、ディスクリプタごとに1つのログエントリなのだから、ログの数がディスクリプタの数そのものを追い越すことはありえないと仮定していた。この不変条件は、ゲストが渡す長さゼロのディスクリプタ1つで破ることができ、日常的なマイグレーションがゲストに制御されたカーネルヒープオーバーフローへと変わった
 
-Disclosed
-:   September 17, 2019 (Tencent Blade Team, coordinated disclosure via oss-security)
+公開日
+:   2019年9月17日（Tencent Blade Team、oss-security 経由の協調的開示）
 
-Reported by
-:   Peter Pi, Tencent Blade Team
+報告者
+:   Peter Pi、Tencent Blade Team
 
 CVSS
-:   7.8 HIGH, NVD (`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`); 7.2 HIGH, Red Hat's own scoring (`CVSS:3.0/AV:L/AC:H/PR:H/UI:R/S:C/C:H/I:H/A:H`) — the two CNAs disagree on attack complexity and privileges required
+:   NVD では 7.8 HIGH（`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`）。Red Hat 独自のスコアでは 7.2 HIGH（`CVSS:3.0/AV:L/AC:H/PR:H/UI:R/S:C/C:H/I:H/A:H`）— 2つの CNA は攻撃の複雑さと必要な特権について見解が分かれている
 
-Bug present since
-:   commit `3a4d5c94e959`, vhost_net's original introduction, January 2010
+バグの混入時期
+:   commit `3a4d5c94e959`、vhost_net の最初の導入、2010年1月
 
-Fixed in
-:   commit `060423bfdee3f`, mainline Linux 5.3 (September 15, 2019)
+修正
+:   commit `060423bfdee3f`、メインライン Linux 5.3（2019年9月15日）
 
-Exploit tool
-:   no independently-confirmed public PoC
+エクスプロイトツール
+:   独立に確認された公開 PoC はない
 
-Actively exploited
-:   no confirmed cases (not on CISA KEV)
+実際の悪用
+:   確認された事例はない（CISA KEV には掲載されていない）
 
-*Part of [War Stories: Virtualization (KVM) Bugs and Escapes](../war-stories.md).*
+*[事件簿：仮想化（KVM）のバグとエスケープ](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-vhost moves virtio device emulation into the host kernel — instead of every virtqueue notification trapping out to QEMU in userspace, `vhost_net.ko` processes the ring directly, cutting a costly userspace round-trip out of the hot path. During live migration, QEMU needs to know which guest-physical pages a virtqueue operation touched, so it can re-transmit exactly the pages that changed since the last pass. vhost supports this by logging descriptor addresses into a fixed-size kernel array (`vq->log`, sized to `dev->iov_limit` entries — 1088 for vhost-net) whenever migration dirty-tracking (`VHOST_F_LOG_ALL`) is negotiated.
+vhost は virtio デバイスのエミュレーションをホストカーネル内に移す — virtqueue の通知のたびにユーザー空間の QEMU へトラップするのではなく、`vhost_net.ko` がリングを直接処理し、コストの高いユーザー空間への往復をホットパスから取り除く。ライブマイグレーション中、QEMU はどのゲスト物理 page が virtqueue 操作によって触られたかを知る必要がある。そうすれば前回のパス以降に変化した page だけを正確に再送できる。vhost はこれをサポートするため、マイグレーション用のダーティトラッキング（`VHOST_F_LOG_ALL`）がネゴシエートされている場合、ディスクリプタのアドレスを固定サイズのカーネル配列（`vq->log`。`dev->iov_limit` 個のエントリ分のサイズで、vhost-net では 1088）に記録する。
 
-The logging code, in `get_indirect()` and `vhost_get_vq_desc()`, relied on one unstated invariant: `log_num` (the count of entries written into the fixed-size log array) could never exceed `in_num` (the count of iovec segments produced for guest-writable descriptors) — because both counters were supposed to move in lockstep, one descriptor at a time. `in_num` was already bounds-checked against the caller's iovec array size. `log_num` itself never was, because it was never supposed to need one.
+`get_indirect()` と `vhost_get_vq_desc()` にあるロギングコードは、明文化されていない1つの不変条件に依存していた。`log_num`（固定サイズのログ配列に書き込まれたエントリ数）は `in_num`（ゲストが書き込み可能なディスクリプタについて生成された iovec セグメント数）を決して超えない、というものである — 2つのカウンタは1ディスクリプタずつ歩調を合わせて進むはずだったからである。`in_num` は呼び出し元の iovec 配列のサイズに対してすでに境界チェックされていた。`log_num` 自体は一度も境界チェックされなかった。それが必要になるはずがなかったからである。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-`translate_desc()` returns `ret = 0` for a zero-length descriptor — its core copy loop, `while ((u64)len > s)`, never executes when `len` is zero. The pre-fix logging code took that return value at face value: `*in_num += ret;` (adds zero, so `in_num` doesn't advance) followed unconditionally by `if (unlikely(log)) { log[*log_num].addr = ...; log[*log_num].len = ...; ++*log_num; }` — the log entry gets written and `log_num` advances regardless of whether `ret` was zero. A single guest-supplied, write-flagged, zero-length descriptor breaks the "log_num tracks in_num" invariant the array-size protection depended on: `log_num` can now advance past `in_num`, with nothing else in the code bounding it directly.
+`translate_desc()` は長さゼロのディスクリプタに対して `ret = 0` を返す — その中核のコピーループ `while ((u64)len > s)` は、`len` がゼロのとき一度も実行されないからである。修正前のロギングコードは、この戻り値を額面どおりに受け取っていた。`*in_num += ret;`（ゼロを足すので `in_num` は進まない）の後に、無条件で `if (unlikely(log)) { log[*log_num].addr = ...; log[*log_num].len = ...; ++*log_num; }` が続く — `ret` がゼロであるかどうかにかかわらず、ログエントリが書き込まれ `log_num` が進む。ゲストが渡す、書き込みフラグ付きで長さゼロのディスクリプタ1つで、配列サイズの保護が依存していた「log_num は in_num に追従する」という不変条件が破られる。`log_num` は `in_num` を追い越して進めるようになり、コード中にそれを直接制限するものは他に何もない。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-The amplification comes from indirect descriptor tables: a guest can supply an indirect table with up to 65,536 entries (bounded only by `count > USHRT_MAX + 1`), each one a write-flagged, zero-length descriptor. Every iteration through the loop writes an attacker-controlled 8-byte guest-physical address into `log[log_num]` and advances `log_num` with no bound at all — so after roughly the first 1,088 entries, the writes run straight off the end of the `kmalloc_array`-allocated log buffer and keep going, potentially for tens of thousands of 16-byte entries, each one attacker-controlled content landing sequentially past the buffer in kernel heap memory. Tencent Blade Team's own disclosure traced the identical call path independently: `handle_rx() → get_rx_bufs() → vhost_get_vq_desc() → get_indirect()`, and their annotated source excerpt flags the same line: "log buffer overflow, because log_num can be USHRT_MAX, but log buffer size is far below than USHRT_MAX." Because the vulnerable path only runs when `VHOST_F_LOG_ALL` is negotiated, this is specifically a migration-time bug — Red Hat's own guidance for administrators who can't immediately patch was to disable guest live migration, or blacklist the `vhost_net` module entirely, as interim mitigations.
+増幅は間接ディスクリプタテーブルから生じる。ゲストは最大 65,536 エントリ（制限は `count > USHRT_MAX + 1` だけ）を持つ間接テーブルを渡すことができ、その各エントリを書き込みフラグ付きで長さゼロのディスクリプタにできる。ループの各反復は、攻撃者が制御する8バイトのゲスト物理アドレスを `log[log_num]` に書き込み、何の制限もなく `log_num` を進める — そのため最初のおよそ 1,088 エントリを過ぎると、書き込みは `kmalloc_array` で割り当てられたログバッファの末尾をそのまま越えて続き、場合によっては数万個の16バイトエントリにわたって、攻撃者が制御する内容がバッファの後ろのカーネルヒープメモリに順番に書き込まれていく。Tencent Blade Team 自身の開示は、同一の呼び出しパス `handle_rx() → get_rx_bufs() → vhost_get_vq_desc() → get_indirect()` を独立にたどっており、注釈付きのソース抜粋で同じ行を指摘している。"log buffer overflow, because log_num can be USHRT_MAX, but log buffer size is far below than USHRT_MAX."（訳: ログバッファのオーバーフロー。log_num は USHRT_MAX になりうるが、ログバッファのサイズは USHRT_MAX よりはるかに小さい）。脆弱なパスは `VHOST_F_LOG_ALL` がネゴシエートされているときにしか実行されないので、これは明確にマイグレーション時のバグである — すぐにパッチを当てられない管理者向けの Red Hat 自身のガイダンスは、暫定的な緩和策として、ゲストのライブマイグレーションを無効にするか、`vhost_net` モジュールを丸ごとブラックリストに入れることだった。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The invariant "one log entry per descriptor, so log_num can never outrun in_num" was true by construction for every ordinary descriptor — a nonzero-length descriptor always produces at least one iovec segment, incrementing both counters together. A zero-length descriptor is a legitimate, spec-permitted value that simply never occurred to the logging code as a case worth separate handling, because from the descriptor-translation logic's point of view it's a complete no-op: no data to copy, nothing to log. The bug is that "nothing to log" and "log nothing" were two different decisions, and only one of them was actually implemented — the code decided there was nothing worth *copying*, but still unconditionally recorded a log entry anyway.
+「ディスクリプタごとに1つのログエントリなので、log_num は決して in_num を追い越さない」という不変条件は、通常のディスクリプタすべてについて構造上成り立っていた — 長さが非ゼロのディスクリプタは必ず少なくとも1つの iovec セグメントを生成し、両方のカウンタを一緒にインクリメントする。長さゼロのディスクリプタは仕様で許された正当な値だが、ロギングコードにとっては別途扱う価値のあるケースとして思い浮かばなかった。ディスクリプタ変換ロジックの観点からは完全な no-op だからである。コピーするデータも、記録するものもない。バグの本質は、「記録するものがない」と「何も記録しない」が2つの別々の判断であり、そのうち一方しか実際には実装されていなかったことにある — コードは*コピー*する価値のあるものはないと判断したが、それでもなお無条件にログエントリを記録していた。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-`060423bfdee3f` ("vhost: make sure log_num < in_num") closes the gap with a two-word change in both `get_indirect()` and `vhost_get_vq_desc()`: the logging condition becomes `if (unlikely(log && ret))` instead of `if (unlikely(log))` — a log entry is now only written when the descriptor actually produced a nonzero-length iovec segment (`ret != 0`), restoring the "log_num tracks in_num" invariant the rest of the code already assumed. As the commit message puts it: "There's no need to log when desc.len = 0, so just don't increment log_num in this case."
+`060423bfdee3f`（"vhost: make sure log_num < in_num"）は、`get_indirect()` と `vhost_get_vq_desc()` の両方での2語の変更でこの穴を塞ぐ。ロギングの条件を `if (unlikely(log))` から `if (unlikely(log && ret))` に変えるのである — ログエントリは、ディスクリプタが実際に長さ非ゼロの iovec セグメントを生成した場合（`ret != 0`）にのみ書き込まれるようになり、残りのコードがすでに前提としていた「log_num は in_num に追従する」という不変条件が回復される。コミットメッセージの言葉では、"There's no need to log when desc.len = 0, so just don't increment log_num in this case."（訳: desc.len = 0 のときはログを取る必要がないので、この場合は単に log_num をインクリメントしない）。
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**An invariant that holds "by construction" for the common case still needs to be checked explicitly wherever the code that depends on it can't independently verify it.** Every code path that trusted `log_num <= in_num` had every reason to believe it — right up until a legitimate, unremarkable input value (a zero-length descriptor) turned out to be a case the invariant's original reasoning never actually covered.
+**一般的なケースで「構造上」成り立つ不変条件であっても、それに依存するコードが独立に検証できない場所では、明示的にチェックする必要がある。** `log_num <= in_num` を信頼していたすべてのコードパスには、そう信じるだけの十分な理由があった — 正当でありふれた入力値（長さゼロのディスクリプタ）が、不変条件の元々の論理が実際にはカバーしていないケースだと判明するまでは。
 
-**A counter that's "supposed to move in lockstep" with a bounds-checked counter is not itself bounds-checked, even when it looks like it should be.** `in_num` was protected because it was directly checked against the destination iovec array's size. `log_num` inherited that protection only in the sense that developers assumed the two counters couldn't diverge — an assumption that was true for nine years, until a single edge-case input showed it wasn't actually enforced anywhere.
+**境界チェックされたカウンタと「歩調を合わせて進むはず」のカウンタは、たとえそう見えても、それ自体が境界チェックされているわけではない。** `in_num` が保護されていたのは、出力先の iovec 配列のサイズに対して直接チェックされていたからである。`log_num` がその保護を受け継いでいたのは、2つのカウンタが乖離しえないと開発者が仮定していたという意味においてだけだった — その仮定は9年間正しかったが、たった1つのエッジケースの入力によって、実際にはどこでも強制されていなかったことが示された。
 
-!!! warning "Pattern to watch for"
-    When two counters are meant to track each other one-for-one, and only one of them has an explicit bounds check, ask what input could advance the unchecked one without advancing the checked one. A zero-length buffer, an empty string, a no-op iteration — the "nothing happened" case is exactly where implicit lockstep invariants are most likely to have never actually been enforced.
+!!! warning "注意すべきパターン"
+    2つのカウンタが1対1で互いに追従することになっていて、一方にしか明示的な境界チェックがない場合、チェックされている方を進めずに、チェックされていない方を進められる入力は何かを問うこと。長さゼロのバッファ、空文字列、no-op の反復 — 「何も起きなかった」ケースこそ、暗黙の歩調合わせの不変条件が一度も実際には強制されていなかった可能性が最も高い場所である。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [virtio](../virtio.md) — the paravirtualized I/O model, virtqueue descriptors, and vhost's role accelerating it
-- [KVM Live Migration](../live-migration.md) — dirty-page logging and pre-copy migration, the feature whose logging path this bug lives in
-- [VENOM: The Floppy Controller Nobody Turned Off](venom-fdc-overflow.md) — another guest-to-host escape rooted in an implicit contract between two pieces of code that stopped holding
+- [virtio](../virtio.md) — 準仮想化 I/O モデル、virtqueue ディスクリプタ、そしてそれを高速化する vhost の役割
+- [KVM ライブマイグレーション](../live-migration.md) — ダーティページロギングとプリコピー型マイグレーション。このバグが存在するロギングパスを持つ機能
+- [VENOM：誰も無効化しなかったフロッピーコントローラ](venom-fdc-overflow.md) — 2つのコード間の暗黙の契約が成り立たなくなったことに根ざす、もう1つのゲストからホストへのエスケープ
 
-## External references {#external-references}
+## 外部参考文献 {#external-references}
 
-- [git.kernel.org: 060423bfdee3f](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=060423bfdee3f8bc6e2c1bac97de24d5415e2bc4) — "vhost: make sure log_num < in_num," the fix
-- [git.kernel.org: 3a4d5c94e959](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3a4d5c94e959359ece6d6b55045c3f046677f55c) — "vhost_net: a kernel-level virtio server," vhost_net's original 2010 introduction
-- [oss-security: CVE-2019-14835 disclosure](https://www.openwall.com/lists/oss-security/2019/09/17/1) — Tencent Blade Team's technical writeup, with an independently-annotated trace of the same overflow
-- [NVD: CVE-2019-14835](https://nvd.nist.gov/vuln/detail/CVE-2019-14835) — CVE record, CVSS 3.1 7.8 HIGH, published September 17, 2019
+- [git.kernel.org: 060423bfdee3f](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=060423bfdee3f8bc6e2c1bac97de24d5415e2bc4) — "vhost: make sure log_num < in_num"、修正
+- [git.kernel.org: 3a4d5c94e959](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3a4d5c94e959359ece6d6b55045c3f046677f55c) — "vhost_net: a kernel-level virtio server"、2010年の vhost_net の最初の導入
+- [oss-security: CVE-2019-14835 disclosure](https://www.openwall.com/lists/oss-security/2019/09/17/1) — Tencent Blade Team の技術解説。同じオーバーフローを独立に注釈付きでトレースしている
+- [NVD: CVE-2019-14835](https://nvd.nist.gov/vuln/detail/CVE-2019-14835) — CVE レコード。CVSS 3.1 7.8 HIGH、2019年9月17日公開

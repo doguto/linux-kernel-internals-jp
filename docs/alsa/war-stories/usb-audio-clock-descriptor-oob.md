@@ -1,62 +1,62 @@
-# The USB Audio Clock Descriptor Out-of-Bounds Reads {#the-usb-audio-clock-descriptor-out-of-bounds-reads}
+# USBオーディオのクロックディスクリプタ範囲外読み出し {#the-usb-audio-clock-descriptor-out-of-bounds-reads}
 
-> Three functions walked a USB audio device's clock-topology descriptors without checking any of them were actually long enough to hold the fields being read — and the CVE covering all three sat in CISA's Known Exploited Vulnerabilities catalog with a federal patch deadline.
+> 3つの関数が、USBオーディオデバイスのクロックトポロジーのディスクリプタを、読み出すフィールドを収めるだけの長さが実際にあるかどうかを1つも確認せずに走査していた。そしてこの3つすべてをカバーするCVEは、連邦政府のパッチ期限付きでCISAのKnown Exploited Vulnerabilitiesカタログに載った。
 
-Landed
-:   Linux, November 2024 (CVE-2024-53150)
+収録
+:   Linux、2024年11月（CVE-2024-53150）
 
-Driver
-:   `snd-usb-audio` (`sound/usb/clock.c`)
+ドライバ
+:   `snd-usb-audio`（`sound/usb/clock.c`）
 
-Reporter
-:   Benoît Sevens (Google)
+報告者
+:   Benoît Sevens（Google）
 
-Fix author
+修正の作者
 :   Takashi Iwai
 
-Mechanism
-:   Missing descriptor length validation, out-of-bounds read
+メカニズム
+:   ディスクリプタ長の検証漏れ、範囲外読み出し
 
-CVE-2024-53150 — CISA Known Exploited Vulnerabilities catalog, BOD 22-01 deadline April 30, 2025
+CVE-2024-53150 — CISA Known Exploited Vulnerabilitiesカタログ、BOD 22-01の期限は2025年4月30日
 
-*Part of [War Stories: ALSA Bugs and Regressions](../war-stories.md).*
+*[事件簿: ALSAのバグとリグレッション](../war-stories.md)の一部。*
 
-## Before state {#before-state}
+## 事前の状態 {#before-state}
 
-A USB audio device describes its internal clock topology — where its sample clock comes from, whether it can select between multiple clock sources, whether it multiplies a source clock up — through a set of USB Audio Class (UAC) descriptors: clock source, clock selector, and clock multiplier units. `sound/usb/clock.c` walks these descriptors to answer questions like "what's this device's current sample rate reference," following unit-ID references the same way the mixer code (see [the mixer teardown use-after-free](mixer-teardown-use-after-free.md)) follows unit IDs through the device's audio-function topology.
+USBオーディオデバイスは、内部のクロックトポロジー（サンプルクロックがどこから来るのか、複数のクロックソースから選択できるのか、ソースクロックを逓倍するのか）を、一連のUSB Audio Class（UAC）ディスクリプタ、すなわちクロックソース、クロックセレクタ、クロックマルチプライヤの各ユニットを通じて記述する。`sound/usb/clock.c` はこれらのディスクリプタを走査して「このデバイスの現在のサンプルレートの基準は何か」といった問いに答える。その際、ミキサーコード（[ミキサー破棄時のuse-after-free](mixer-teardown-use-after-free.md)を参照）がデバイスのオーディオファンクショントポロジーを通じてユニットIDをたどるのと同じやり方で、ユニットIDの参照をたどる。
 
-## The trigger {#the-trigger}
+## きっかけ {#the-trigger}
 
-Each descriptor type carries a `bLength` field stating how many bytes it actually occupies. `validate_clock_source()`, `validate_clock_selector()`, and `validate_clock_multiplier()` read fixed-offset fields out of these descriptors — and, for the selector, a variable-length `bNrInPins`-sized array of input-pin unit IDs plus UAC2/UAC3-specific trailing fields — without first confirming `bLength` was large enough to contain what they were about to read. A USB audio device (physical, hostile, or emulated purely in firmware/software presented to the host) can advertise a descriptor with a `bLength` far shorter than a well-formed one, and the driver reads past the end of the buffer that descriptor was copied into.
+各ディスクリプタ型は、実際に何バイトを占めるかを示す `bLength` フィールドを持つ。`validate_clock_source()`、`validate_clock_selector()`、`validate_clock_multiplier()` は、これらのディスクリプタから固定オフセットのフィールドを読み出す。セレクタの場合はさらに、`bNrInPins` 個の要素からなる入力ピンのユニットIDの可変長配列と、UAC2/UAC3固有の後続フィールドも読み出す。しかも、これから読み出すものを収めるだけの大きさが `bLength` にあるかを事前に確認していなかった。USBオーディオデバイス（物理的なもの、悪意あるもの、あるいはファームウェア／ソフトウェアで純粋にエミュレートされてホストに提示されるもの）は、正しい形式のものよりはるかに短い `bLength` のディスクリプタを提示でき、ドライバはそのディスクリプタがコピーされたバッファの終端を越えて読み出してしまう。
 
-## Observed behavior {#observed-behavior}
+## 観測された挙動 {#observed-behavior}
 
-An out-of-bounds read of kernel heap memory, triggered purely by what a USB device announces during enumeration — no user interaction beyond plugging in (or having the kernel probe) the device required. NVD rates this CVSS 3.1 7.1 (HIGH). The clock-topology parse runs early, during device probe, so the bug is reachable the moment a malicious USB audio device is presented to a host — but that ease of triggering isn't what put it on CISA's Known Exploited Vulnerabilities catalog. KEV listing requires confirmed evidence of *active* exploitation, not just theoretical reachability; this CVE's presence there means CISA had specific evidence it was actually being exploited, which is also what came with a federal patch deadline (BOD 22-01) of April 30, 2025.
+カーネルヒープメモリの範囲外読み出しであり、USBデバイスが列挙中に何を申告するかだけで引き起こされる。デバイスを挿す（あるいはカーネルにデバイスをプローブさせる）以外にユーザーの操作は必要ない。NVDはこれをCVSS 3.1で7.1（HIGH）と評価している。クロックトポロジーの解析はデバイスのプローブ中の早い段階で実行されるため、悪意あるUSBオーディオデバイスがホストに提示された瞬間にこのバグに到達できる。しかし、この引き起こしやすさがCISAのKnown Exploited Vulnerabilitiesカタログに載った理由ではない。KEVへの掲載には、理論上の到達可能性だけでなく、*実際の*悪用の確かな証拠が必要である。このCVEがそこに載っているということは、CISAが実際に悪用されている具体的な証拠を持っていたことを意味し、それが2025年4月30日という連邦政府のパッチ期限（BOD 22-01）が付いた理由でもある。
 
-## Why it happened {#why-it-happened}
+## なぜ起きたか {#why-it-happened}
 
-The selector descriptor is the sharpest illustration of why this class of bug is easy to introduce and easy to miss: it isn't a fixed-size struct. `bNrInPins` is itself a field inside the descriptor, and the array of input-pin IDs it counts comes right after it, followed by more fields whose presence depends on which UAC revision — UAC2 or UAC3; clock source/selector/multiplier topology is a UAC2/UAC3-only concept, UAC1 devices don't carry these descriptors at all — the device claims. Validating "is this descriptor long enough" for a variable-length, revision-dependent structure means computing the expected length from fields you've already read out of the descriptor — you can't check the length before reading `bNrInPins`, only after, and only if you remember to gate everything that follows on that check. Three separate functions, three separate descriptor shapes, and the length check was missing from all three.
+セレクタディスクリプタは、この種のバグがなぜ混入しやすく見逃しやすいかを最も鮮明に示している。これは固定サイズの構造体ではない。`bNrInPins` 自体がディスクリプタ内のフィールドであり、それが数える入力ピンIDの配列がその直後に続き、さらにその後に、デバイスが主張するUACのリビジョン（UAC2かUAC3か。クロックソース／セレクタ／マルチプライヤのトポロジーはUAC2/UAC3だけの概念であり、UAC1デバイスはこれらのディスクリプタをまったく持たない）によって存在が変わるフィールドが続く。可変長でリビジョン依存の構造体について「このディスクリプタは十分な長さか」を検証するには、ディスクリプタからすでに読み出したフィールドから期待される長さを計算する必要がある。`bNrInPins` を読む前に長さをチェックすることはできず、読んだ後にしかできない。しかも、後続のすべてをそのチェックで守ることを覚えていた場合に限られる。3つの別々の関数、3つの別々のディスクリプタの形があり、長さチェックは3つすべてから欠けていた。
 
-## Resolution {#resolution}
+## 解決 {#resolution}
 
-The fix (`a3dd4d63eeb4`) adds a `DESC_LENGTH_CHECK` macro and applies it — with the correct expected-length formula for each descriptor's shape — inside `validate_clock_source()`, `validate_clock_selector()`, and `validate_clock_multiplier()`. The selector's check accounts for its `bNrInPins`-sized trailing array plus the UAC2/UAC3-only fields, rather than treating it as fixed-size. The fix was backported to the stable trees (`096bb5b43edf7`).
+修正（`a3dd4d63eeb4`）は `DESC_LENGTH_CHECK` マクロを追加し、各ディスクリプタの形に応じた正しい期待長の計算式とともに、`validate_clock_source()`、`validate_clock_selector()`、`validate_clock_multiplier()` の中でそれを適用する。セレクタのチェックは、固定サイズとして扱うのではなく、`bNrInPins` 個の要素からなる後続配列とUAC2/UAC3のみのフィールドを考慮している。修正はstableツリーにバックポートされた（`096bb5b43edf7`）。
 
-## What it taught us {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
-**A bug class doesn't stay confined to one function once the same descriptor-walking pattern gets copy-adapted to a sibling descriptor type.** All three clock-descriptor parsers needed the same fix because all three had the same shape: read fields at fixed offsets (or offsets computed from an earlier field) without confirming the buffer is that long. This is the same underlying mistake as [the 2019 mixer-unit descriptor OOB](../war-stories.md#case-3-the-mixer-unit-descriptor-oob-five-years-before-the-clock-descriptors-cve-2019-15117) five years earlier, in a different `sound/usb/` parser entirely — length-prefixed, variable-shape USB descriptors are a recurring source of this exact bug across the driver, not a one-off.
+**同じディスクリプタ走査パターンが兄弟のディスクリプタ型向けにコピーして手直しされると、バグの種類は1つの関数に留まらない。** 3つのクロックディスクリプタのパーサーすべてに同じ修正が必要だったのは、3つすべてが同じ形をしていたからである。つまり、バッファにその長さがあることを確認せずに、固定オフセット（あるいはそれ以前のフィールドから計算したオフセット）のフィールドを読み出していた。これは5年前の、まったく別の `sound/usb/` パーサーにおける[2019年のミキサーユニットディスクリプタのOOB](../war-stories.md#case-3-the-mixer-unit-descriptor-oob-five-years-before-the-clock-descriptors-cve-2019-15117)と根本的に同じ誤りである。長さを前置した可変形状のUSBディスクリプタは、ドライバ全体でまさにこのバグが繰り返し生まれる発生源であり、一度きりのものではない。
 
-**"Do I have enough bytes for this fixed part" and "do I have enough bytes for the variable part whose size I just read" are two different checks, and a descriptor parser needs both, in that order.** Checking only the fixed header length and then trusting a count field you read from inside that header to index further into the buffer is the mistake that recurs across all three functions here.
+**「この固定部分に十分なバイトがあるか」と「今読んだサイズを持つ可変部分に十分なバイトがあるか」は別々のチェックであり、ディスクリプタのパーサーにはその順序で両方が必要である。** 固定ヘッダーの長さだけをチェックし、そのヘッダーの中から読んだカウントフィールドを信じてさらにバッファの先をインデックスするのが、ここでの3つの関数すべてで繰り返された誤りである。
 
-!!! warning "Pattern to watch for"
-    A parser for a length-prefixed, externally-supplied structure that reads a count/size field from *inside* the structure and then uses it to index further into the same buffer, without re-validating the buffer is long enough to cover what that count field just promised.
+!!! warning "注意すべきパターン"
+    外部から供給される、長さを前置した構造体のパーサーが、構造体の*内部*からカウント／サイズのフィールドを読み、それを使って同じバッファのさらに先をインデックスしているのに、そのカウントフィールドが約束した範囲をカバーできるだけの長さがバッファにあるかを再検証していない。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [The 21-Year-Latent USB Mixer Teardown Use-After-Free](mixer-teardown-use-after-free.md) — a different `sound/usb/` lifetime bug, in the mixer rather than the clock-topology parser
-- [ALSA Overview](../README.md) — where USB audio's device model fits into ALSA's card/component structure
+- [21年潜伏したUSBミキサー破棄時のuse-after-free](mixer-teardown-use-after-free.md) — クロックトポロジーのパーサーではなくミキサーにおける、別の `sound/usb/` の寿命管理のバグ
+- [ALSAの概要](../README.md) — USBオーディオのデバイスモデルがALSAのカード／コンポーネント構造のどこに収まるか
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [NVD: CVE-2024-53150](https://nvd.nist.gov/vuln/detail/CVE-2024-53150) — CVSS 3.1 7.1 HIGH; CISA Known Exploited Vulnerabilities catalog, BOD 22-01 deadline 2025-04-30
-- [git.kernel.org: a3dd4d63eeb4](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a3dd4d63eeb452cfb064a13862fb376ab108f6a6) — the fix: `DESC_LENGTH_CHECK` applied to all three clock-descriptor validators
-- [git.kernel.org: 096bb5b43edf](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=096bb5b43edf755bc4477e64004fa3a20539ec2f) — the stable-tree backport
+- [NVD: CVE-2024-53150](https://nvd.nist.gov/vuln/detail/CVE-2024-53150) — CVSS 3.1 7.1 HIGH。CISA Known Exploited Vulnerabilitiesカタログ、BOD 22-01の期限は2025-04-30
+- [git.kernel.org: a3dd4d63eeb4](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a3dd4d63eeb452cfb064a13862fb376ab108f6a6) — 修正: 3つのクロックディスクリプタ検証関数すべてに `DESC_LENGTH_CHECK` を適用
+- [git.kernel.org: 096bb5b43edf](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=096bb5b43edf755bc4477e64004fa3a20539ec2f) — stableツリーへのバックポート
